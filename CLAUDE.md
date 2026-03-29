@@ -20,6 +20,8 @@ ranker.py        기사 점수 계산 & 피드백 처리
 database.py      SQLite CRUD
 config.py        환경변수 & 전역 상수
 crawlers/        폴백 크롤러 (ANTHROPIC_API_KEY 없을 때)
+agents/
+  news_curation_agent.py  ★ tool-use 기반 독립 큐레이션 에이전트
 ```
 
 ## Dev Commands
@@ -52,3 +54,6 @@ python main.py
 | [`.claude/skills/discord-bot.md`](.claude/skills/discord-bot.md) | `bot.py` 이벤트·임베드·커맨드·반응 처리 |
 | [`.claude/skills/sqlite-ops.md`](.claude/skills/sqlite-ops.md) | `database.py` 스키마·쿼리·선호도 업데이트 |
 | [`.claude/skills/mcp-builder.md`](.claude/skills/mcp-builder.md) | MCP 인터페이스 추가 시 |
+| [`.claude/skills/preference-analyzer.md`](.claude/skills/preference-analyzer.md) | DB 선호도 읽기·쓰기·프롬프트 주입 패턴 |
+| [`.claude/skills/article-finder.md`](.claude/skills/article-finder.md) | 웹 검색 기반 AI 기사 탐색 패턴 |
+| [`.claude/skills/article-reviewer.md`](.claude/skills/article-reviewer.md) | 기사 품질 검토·필터링·랭킹 파이프라인 |

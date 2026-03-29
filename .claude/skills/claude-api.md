@@ -14,16 +14,17 @@ source: https://skills.sh/anthropics/skills/claude-api
 
 ## 언제 어떤 방식을 쓸까
 
-| 목적 | 방식 |
-|------|------|
-| 분류·요약·추출·Q&A (단발) | `client.messages.create()` |
-| 멀티스텝 코드 제어 워크플로 | API + tool use |
-| 파일/웹/셸 접근이 필요한 에이전트 | Agent SDK |
-| 커스텀 도구로 최대 유연성 | API + agentic loop |
+| 목적                              | 방식                       |
+| --------------------------------- | -------------------------- |
+| 분류·요약·추출·Q&A (단발)         | `client.messages.create()` |
+| 멀티스텝 코드 제어 워크플로       | API + tool use             |
+| 파일/웹/셸 접근이 필요한 에이전트 | Agent SDK                  |
+| 커스텀 도구로 최대 유연성         | API + agentic loop         |
 
 ## 핵심 패턴
 
 ### 단순 호출
+
 ```python
 import anthropic
 
@@ -38,6 +39,7 @@ print(response.content[0].text)
 ```
 
 ### 스트리밍 (긴 응답 필수)
+
 ```python
 with client.messages.stream(
     model="claude-opus-4-6",
@@ -48,6 +50,7 @@ with client.messages.stream(
 ```
 
 ### Tool Use (web_search 포함)
+
 ```python
 with client.messages.stream(
     model="claude-opus-4-6",
@@ -65,6 +68,7 @@ for block in response.content:
 ```
 
 ### Adaptive Thinking
+
 ```python
 # ✅ 올바른 방식 (2026 이후)
 thinking={"type": "adaptive"}
@@ -92,11 +96,11 @@ except anthropic.APIError as e:
 
 ## 모델 가격표 (2026-02-17)
 
-| 모델 | ID | 입력 | 출력 | 컨텍스트 |
-|------|-----|------|------|----------|
-| Opus 4.6 | `claude-opus-4-6` | $5/1M | $25/1M | 200K (1M beta) |
-| Sonnet 4.6 | `claude-sonnet-4-6` | $3/1M | $15/1M | 200K (1M beta) |
-| Haiku 4.5 | `claude-haiku-4-5-20251001` | $1/1M | $5/1M | 200K |
+| 모델       | ID                          | 입력  | 출력   | 컨텍스트       |
+| ---------- | --------------------------- | ----- | ------ | -------------- |
+| Opus 4.6   | `claude-opus-4-6`           | $5/1M | $25/1M | 200K (1M beta) |
+| Sonnet 4.6 | `claude-sonnet-4-6`         | $3/1M | $15/1M | 200K (1M beta) |
+| Haiku 4.5  | `claude-haiku-4-5-20251001` | $1/1M | $5/1M  | 200K           |
 
 ## 이 프로젝트에서의 사용 위치
 
