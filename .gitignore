@@ -137,6 +137,9 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+
+# Bot data
+data/
 .venv
 env/
 venv/
