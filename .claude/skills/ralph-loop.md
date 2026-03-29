@@ -1,11 +1,12 @@
 ---
 name: ralph-loop
-description: Multi-round iterative research pattern used in curator.py. Use when modifying the Claude research engine — round management, topic rotation, deduplication, early stopping, and final selection phases.
+description: Multi-round iterative research pattern used in curator.py. Use when modifying the Claude research engine — round management, topic rotation, deduplication, early stopping, and final selection phases. Target content: practical AI tool usage articles for developers (Claude Code, Cursor, prompt engineering, MCP, agent patterns).
 ---
 
 # Ralph Loop — 다중 라운드 리서치 패턴
 
-이 프로젝트의 `curator.py`에서 사용하는 AI 뉴스 수집 방식.
+이 프로젝트의 `curator.py`에서 사용하는 AI 실용 아티클 수집 방식.
+대상 독자: Claude Code, Cursor 등 AI 코딩 도구를 매일 사용하는 소프트웨어 엔지니어.
 단일 대형 호출 대신 토픽별 소형 호출을 반복해 안정성과 다양성을 모두 확보한다.
 
 ## 3단계 구조
@@ -22,14 +23,14 @@ Phase 3: 최종 선별 호출      (web_search 없이 판단만, ~8000 토큰)
 
 ### 토픽 배정
 
-각 라운드는 서로 다른 토픽에 집중한다:
+각 라운드는 서로 다른 토픽에 집중한다 (일반 뉴스 X, 실용 아티클 O):
 
 ```
-R1: models         R6: safety_policy
-R2: company_news   R7: research_labs
-R3: arxiv_papers   R8: applications
-R4: dev_tools      R9: community_buzz
-R5: korean_news    R10: hardware_infra
+R1: claude_code_tips      R6: llm_best_practices
+R2: prompt_engineering    R7: agent_patterns
+R3: ai_coding_tools       R8: korean_practitioner
+R4: mcp_tools             R9: community_tips
+R5: dev_productivity      R10: tutorials_deep_dive
 ```
 
 ### 조기 종료 조건
@@ -92,13 +93,14 @@ response = client.messages.create(
 
 ```python
 _TOPICS: list[tuple[str, str]] = [
-    ("topic_name", "Search instruction for this topic area..."),
+    ("topic_name", "Search instruction targeting practical developer content..."),
     ...
 ]
 ```
 
 - 최대 10개 (MAX_ROUNDS 기본값과 맞춤)
 - 토픽이 10개 이하면 라운드 수 = 토픽 수
+- `topic_desc`는 반드시 "튜토리얼/가이드/팁" 성격임을 명시 — 단순 뉴스 검색어는 피할 것
 
 ## 파라미터 조정 기준
 

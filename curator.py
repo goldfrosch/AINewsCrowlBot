@@ -21,55 +21,65 @@ import token_tracker
 # (name, search_instruction)  — 순서대로 각 라운드에 배정됨
 _TOPICS: list[tuple[str, str]] = [
     (
-        "models",
-        "Latest AI model releases, benchmark results, and model evaluations published in the last 48 hours. "
-        "Include GPT-4o, Claude, Gemini, Llama, Mistral, and other major models.",
+        "claude_code_tips",
+        "Articles, blog posts, and tutorials about using Claude Code CLI effectively: "
+        "tips, workflows, slash commands, hooks, MCP servers, CLAUDE.md patterns, agentic coding techniques. "
+        "Search: 'Claude Code tips', 'Claude Code workflow', 'Claude Code tutorial', 'Claude Code MCP'.",
     ),
     (
-        "company_news",
-        "AI company announcements: funding rounds, product launches, acquisitions, partnerships, "
-        "and safety/policy statements from OpenAI, Anthropic, Google, Meta, xAI, Mistral, etc. (last 48h)",
+        "prompt_engineering",
+        "Practical guides and best practices for prompt engineering with LLMs: "
+        "system prompt design, chain-of-thought, few-shot examples, structured output, context management. "
+        "Focus on actionable techniques developers can apply immediately. (last 7 days)",
     ),
     (
-        "arxiv_papers",
-        "Notable ArXiv preprints in cs.AI, cs.LG, cs.CL submitted in the last 48 hours. "
-        "Focus on papers with significant findings or from well-known research groups.",
+        "ai_coding_tools",
+        "How-to articles and comparisons for AI coding assistants: Cursor, GitHub Copilot, Codeium, "
+        "Windsurf, Aider, and similar tools. Real usage patterns, productivity tips, configuration guides. "
+        "Search: 'AI coding assistant tips', 'Cursor workflow', 'Copilot best practices'. (last 7 days)",
     ),
     (
-        "dev_tools",
-        "New AI developer tools, open-source releases, frameworks, and APIs launched this week. "
-        "Include HuggingFace releases, LangChain updates, new inference engines, etc.",
+        "mcp_tools",
+        "Tutorials and articles about Model Context Protocol (MCP): building MCP servers, "
+        "integrating tools with Claude, agent tool-use patterns, function calling best practices. "
+        "Search: 'MCP server tutorial', 'Claude tool use', 'model context protocol guide'. (last 7 days)",
     ),
     (
-        "korean_news",
-        "한국어 AI 뉴스 — 최근 48시간 이내 발표된 인공지능 관련 소식. "
-        "검색어: '인공지능 최신', 'LLM 발표', 'AI 스타트업', '딥러닝 논문', 'AI 규제'. "
-        "출처: IT조선, AI타임스, ZDNet Korea, 전자신문, 네이버 뉴스.",
+        "dev_productivity",
+        "Articles about AI-assisted developer workflows: using LLMs for code review, "
+        "test generation, documentation, refactoring, debugging. Real practitioner case studies "
+        "and measurable productivity improvements. (last 7 days)",
     ),
     (
-        "safety_policy",
-        "AI safety, alignment, ethics, and government policy news from the last 48 hours. "
-        "EU AI Act, US AI policy, alignment research, red-teaming results, safety papers.",
+        "llm_best_practices",
+        "Technical articles on working effectively with LLMs in production: context window management, "
+        "RAG patterns, structured output, error handling, cost optimization, latency reduction. "
+        "Targeted at developers integrating LLMs into their stack. (last 7 days)",
     ),
     (
-        "research_labs",
-        "Research breakthroughs and technical blog posts from major AI labs: "
-        "DeepMind, FAIR, Microsoft Research, Stanford HAI, MIT CSAIL, CMU (last 48h).",
+        "agent_patterns",
+        "Guides and tutorials on building AI agents: multi-agent systems, planning loops, "
+        "tool orchestration, LangChain/LlamaIndex/CrewAI/AutoGen patterns, agentic coding workflows. "
+        "Search: 'AI agent tutorial', 'agentic coding', 'LLM agent pattern'. (last 7 days)",
     ),
     (
-        "applications",
-        "Real-world AI applications launched or announced recently: robotics, healthcare, "
-        "autonomous vehicles, creative tools, enterprise AI, coding assistants (last 48h).",
+        "korean_practitioner",
+        "한국어 AI 활용 아티클 — 개발자를 위한 Claude, ChatGPT, Cursor 실전 사용법, "
+        "프롬프트 엔지니어링 팁, AI 코딩 워크플로우 가이드. "
+        "검색어: 'Claude Code 사용법', '프롬프트 엔지니어링', 'AI 코딩 도구', 'LLM 개발 팁'. "
+        "출처: 개인 기술 블로그, 브런치, 벨로그, 미디엄 한국어.",
     ),
     (
-        "community_buzz",
-        "Viral AI discussions, influential posts from key researchers (Karpathy, LeCun, Bengio, "
-        "Altman, Hassabis), and trending HackerNews AI threads from the last 24 hours.",
+        "community_tips",
+        "Developer community discussions about AI tool usage: HackerNews threads, Reddit r/ClaudeAI "
+        "r/LocalLLaMA, Twitter/X threads from practitioners sharing concrete tips and workflows. "
+        "Focus on posts with real code examples or measurable results. (last 7 days)",
     ),
     (
-        "hardware_infra",
-        "AI hardware and infrastructure news: new GPU/TPU/NPU releases, data center investments, "
-        "inference optimization, chip announcements from Nvidia, AMD, Intel, Groq (last 48h).",
+        "tutorials_deep_dive",
+        "In-depth technical tutorials: step-by-step guides for building AI-powered apps, "
+        "integrating Claude/OpenAI APIs, fine-tuning workflows, embeddings and vector databases "
+        "for developers. Search: 'Claude API tutorial', 'LLM app tutorial'. (last 7 days)",
     ),
 ]
 
@@ -80,19 +90,25 @@ RALPH_LOOP_ENABLED = False
 # ─── 시스템 프롬프트 ──────────────────────────────────────────────────────────
 
 _SYSTEM_RESEARCH = """\
-You are a focused AI news researcher. Your task is to find the most important recent AI news
-on a specific topic using web search.
+You are a focused researcher finding high-quality articles for developers who use AI tools daily.
+Your task is to find practical, actionable content — NOT general AI news.
+
+Target reader: software engineer who uses Claude Code, Cursor, or similar AI coding tools.
 
 Rules:
-- Only articles published within the last 48 hours
-- No listicles, roundups of old news, or sponsored content
+- Prioritize tutorials, how-to guides, best practices, and case studies over news
+- Articles should contain concrete techniques, code examples, or measurable insights
+- No sponsored content, generic AI hype, or press releases
+- No pure news about model releases unless it directly affects developer workflow
 - 2–4 targeted searches, then output JSON immediately
 - If nothing relevant found, output an empty array []
 - Output ONLY valid JSON — no preamble, no explanation"""
 
 _SYSTEM_SELECT = """\
-You are an expert AI news curator making final editorial decisions.
-You will receive a list of candidate articles and must select the best ones for a daily briefing.
+You are a senior developer curating a daily briefing for AI-tool practitioners.
+You will receive candidate articles and must select the best ones.
+Prefer: actionable content, concrete examples, real workflow improvements.
+Reject: general AI news, hype without substance, duplicate coverage.
 Output ONLY valid JSON — no explanation, no preamble."""
 
 
@@ -271,16 +287,17 @@ def _select_best(
 
     candidates_json = json.dumps(candidates, ensure_ascii=False, indent=2)
 
-    prompt = f"""You have {len(candidates)} AI news articles collected across multiple research rounds.
+    prompt = f"""You have {len(candidates)} articles collected for developers who use AI coding tools.
 Select the best {target_count} for a daily Discord briefing.
 {pref_block}
 
 ## Selection Criteria
-1. **Recency** — prefer articles from the last 24h over 24–48h
-2. **Significance** — major announcements > minor updates
-3. **Diversity** — mix of topics (models, research, tools, company news, Korean news)
-4. **No near-duplicates** — if two articles cover the same event, keep only the best one
-5. **Quality** — prefer primary sources over secondary coverage
+1. **Actionability** — contains concrete tips, code, or step-by-step techniques a developer can apply today
+2. **Relevance** — directly useful for someone using Claude Code, Cursor, or similar AI dev tools
+3. **Quality** — tutorial/guide > case study > opinion > news announcement
+4. **Diversity** — mix across: prompting, coding tools, agents, workflows, Korean content
+5. **No near-duplicates** — if two articles cover the same technique, keep only the best one
+6. **Depth** — prefer in-depth content over surface-level listicles
 
 ## Candidates
 {candidates_json}
@@ -328,10 +345,11 @@ def _single_research(
     pref_hint = f"\nUser enjoys these topics: {', '.join(liked_kws)}" if liked_kws else ""
 
     lines = [
-        f"Find the {count} most important AI news articles published in the last 48 hours.",
-        "Cover a diverse mix: model releases, company news, research papers, developer tools, and Korean AI news.",
+        f"Find {count} high-quality articles for developers who use AI coding tools like Claude Code or Cursor.",
+        "Focus on: practical tutorials, prompt engineering tips, AI coding workflows, MCP/tool-use guides, developer productivity.",
+        "NOT general AI news — only content with actionable techniques or concrete examples.",
         pref_hint,
-        "Requirements: real news only, no listicles, no sponsored content.",
+        "Requirements: real articles only, no sponsored content, no pure press releases.",
         "Run 2–4 targeted searches, then output JSON.",
         "",
     ]

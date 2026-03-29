@@ -1,11 +1,12 @@
 ---
 name: article-finder
-description: 웹 검색으로 최신 AI 기사를 탐색하는 패턴. curator.py의 Ralph Loop 단일 라운드 또는 에이전트 도구로 AI 기사를 수집할 때 사용.
+description: 웹 검색으로 AI 도구 실용 아티클을 탐색하는 패턴. curator.py의 Ralph Loop 단일 라운드 또는 에이전트 도구로 Claude Code·Cursor·프롬프트 엔지니어링 등 개발자 실용 콘텐츠를 수집할 때 사용.
 ---
 
-# Article Finder — AI 기사 탐색 패턴
+# Article Finder — AI 실용 아티클 탐색 패턴
 
-`curator.py`의 `_research_round()`를 기반으로 한 AI 기사 수집 방법.
+`curator.py`의 `_research_round()`를 기반으로 한 아티클 수집 방법.
+대상 독자: Claude Code, Cursor 등 AI 코딩 도구를 매일 사용하는 소프트웨어 엔지니어.
 `web_search_20260209` 도구로 Claude에게 웹 검색을 위임한다.
 
 ---
@@ -23,8 +24,8 @@ client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 articles = _research_round(
     client=client,
     round_num=1,
-    topic_name="models",
-    topic_desc="Latest AI model releases and benchmark results in the last 48 hours.",
+    topic_name="claude_code_tips",
+    topic_desc="Articles and tutorials about using Claude Code CLI effectively: tips, workflows, hooks, MCP servers.",
     exclude_urls=get_todays_posted_urls(),   # 오늘 이미 게시된 URL 제외
     already_found_urls=set(),
     count=5,
@@ -38,16 +39,16 @@ articles = _research_round(
 
 | 토픽명 | 검색 대상 |
 |--------|----------|
-| `models` | GPT-4o·Claude·Gemini·Llama 등 신규 모델·벤치마크 |
-| `company_news` | OpenAI·Anthropic·Google 등 펀딩·출시·인수 |
-| `arxiv_papers` | cs.AI / cs.LG / cs.CL 최신 논문 |
-| `dev_tools` | HuggingFace·LangChain·vLLM 등 개발 도구 |
-| `korean_news` | 한국어 AI 뉴스 (IT조선·AI타임스·ZDNet Korea) |
-| `safety_policy` | AI 안전·정책·규제 뉴스 |
-| `research_labs` | DeepMind·FAIR·Stanford HAI 연구 |
-| `applications` | 로봇·헬스케어·코딩 어시스턴트 응용 사례 |
-| `community_buzz` | HackerNews·Karpathy·LeCun 등 커뮤니티 동향 |
-| `hardware_infra` | Nvidia·AMD·Groq GPU/TPU/NPU 뉴스 |
+| `claude_code_tips` | Claude Code CLI 사용법·워크플로우·슬래시 커맨드·훅·CLAUDE.md 패턴 |
+| `prompt_engineering` | 프롬프트 엔지니어링 기법·시스템 프롬프트·CoT·구조화 출력 |
+| `ai_coding_tools` | Cursor·GitHub Copilot·Codeium·Aider 실전 사용 팁·설정 가이드 |
+| `mcp_tools` | MCP 서버 구축·Claude 도구 통합·에이전트 tool-use 패턴 |
+| `dev_productivity` | LLM 기반 코드 리뷰·테스트 생성·문서화·리팩터링 워크플로우 |
+| `llm_best_practices` | 컨텍스트 윈도우 관리·RAG·비용 최적화·지연 감소 실전 기법 |
+| `agent_patterns` | AI 에이전트 구축·LangChain·CrewAI·AutoGen·멀티에이전트 패턴 |
+| `korean_practitioner` | 한국어 AI 활용 아티클 (Velog·브런치·블로그) |
+| `community_tips` | HN·Reddit r/ClaudeAI·Twitter 개발자 커뮤니티 실전 팁 스레드 |
+| `tutorials_deep_dive` | Claude/OpenAI API 통합·임베딩·벡터 DB 심층 튜토리얼 |
 
 ---
 
@@ -61,8 +62,8 @@ articles = _research_round(
     round_num=1,
     topic_name="custom",
     topic_desc=(
-        "AI robotics news: new robot models, autonomous systems, "
-        "manipulation tasks, humanoid robots published in the last 48 hours."
+        "Step-by-step tutorials for building MCP servers that integrate with Claude Code. "
+        "Include code examples and configuration patterns."
     ),
     exclude_urls=[],
     already_found_urls=set(),
@@ -108,17 +109,17 @@ async def find_articles_parallel(topics: list[str], count: int = 3) -> list[dict
 
 ## 5. 응답 JSON 구조
 
-`_research_round` 가 반환하는 각 기사 딕셔너리:
+`_research_round` 가 반환하는 각 아티클 딕셔너리:
 
 ```json
 {
   "url": "https://...",
-  "title": "GPT-5 Releases with Extended Context",
-  "source": "OpenAI Blog",
+  "title": "10 Claude Code Workflows That Changed How I Write Code",
+  "source": "Simon Willison's Weblog",
   "description": "2–3 문장 요약",
-  "author": "Sam Altman",
+  "author": "Simon Willison",
   "published_at": "2026-03-29",
-  "curator_reason": "주요 모델 출시 — 성능 지표 포함"
+  "curator_reason": "Claude Code 훅과 CLAUDE.md 패턴에 대한 구체적 예시 포함"
 }
 ```
 
@@ -154,5 +155,5 @@ except Exception as e:
     articles = []
 
 if not articles:
-    print("[ArticleFinder] 이 토픽에서 기사를 찾지 못했습니다.")
+    print("[ArticleFinder] 이 토픽에서 아티클을 찾지 못했습니다.")
 ```

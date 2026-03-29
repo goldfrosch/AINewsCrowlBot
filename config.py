@@ -32,19 +32,25 @@ MAX_PER_SOURCE = 10         # 소스당 최대 수집 수
 
 # ── AI 관련 필터 키워드 ───────────────────────────
 AI_KEYWORDS = [
-    # 영문
-    "ai", "artificial intelligence", "machine learning", "deep learning",
-    "llm", "large language model", "gpt", "claude", "gemini", "mistral",
-    "neural network", "transformer", "diffusion model", "generative ai",
-    "chatgpt", "openai", "anthropic", "google deepmind", "meta ai",
-    "stable diffusion", "midjourney", "dall-e", "computer vision", "nlp",
-    "natural language", "reinforcement learning", "rlhf", "fine-tuning",
-    "autonomous", "robotics", "agi", "foundation model", "multimodal",
-    "vector database", "rag", "retrieval augmented", "embedding",
-    "hugging face", "langchain", "llamaindex", "ollama", "vllm",
+    # AI 코딩 도구 및 워크플로우
+    "claude code", "cursor", "github copilot", "codeium", "windsurf", "aider",
+    "claude", "chatgpt", "gpt-4", "gemini", "llm", "large language model",
+    # 실용적 기법
+    "prompt engineering", "system prompt", "chain of thought", "few-shot",
+    "rag", "retrieval augmented", "embedding", "vector database",
+    "fine-tuning", "context window", "structured output", "function calling",
+    # 에이전트 및 도구
+    "mcp", "model context protocol", "tool use", "ai agent", "agentic",
+    "langchain", "llamaindex", "crewai", "autogen", "langgraph",
+    "anthropic", "openai", "google deepmind",
+    # 개발자 생산성
+    "ai workflow", "ai coding", "ai assistant", "copilot", "code generation",
+    "ai productivity", "developer tools", "llm integration",
+    "hugging face", "ollama", "vllm", "litellm",
     # 한국어
-    "인공지능", "머신러닝", "딥러닝", "생성형 ai", "생성형ai",
-    "대규모 언어", "자율주행", "챗봇", "거대언어모델",
+    "인공지능", "클로드", "프롬프트 엔지니어링", "llm 활용",
+    "ai 코딩", "ai 개발", "생성형 ai", "거대언어모델",
+    "ai 워크플로우", "ai 도구",
 ]
 
 # ── Reddit 서브레딧 ───────────────────────────────
