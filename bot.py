@@ -19,7 +19,6 @@ import discord
 from discord.ext import commands, tasks
 
 import database as db
-import crawlers
 import curator as ai_curator
 from ranker import rank_articles, apply_feedback
 from config import (
@@ -29,7 +28,6 @@ from config import (
     MORE_ARTICLES_MAX,
     DAILY_POST_HOUR,
     TIMEZONE,
-    ANTHROPIC_API_KEY,
 )
 
 KST = ZoneInfo(TIMEZONE)
@@ -127,8 +125,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     db.init_db()
-    mode = "🧠 Claude 리서치" if ANTHROPIC_API_KEY else "🔍 크롤러 폴백"
-    print(f"✅ 봇 로그인: {bot.user}  |  채널: {DISCORD_CHANNEL_ID}  |  모드: {mode}")
+    print(f"✅ 봇 로그인: {bot.user}  |  채널: {DISCORD_CHANNEL_ID}")
     if not daily_brief.is_running():
         daily_brief.start()
     print(f"📅 매일 {DAILY_POST_HOUR:02d}:00 KST 자동 브리핑 등록")
@@ -165,53 +162,36 @@ async def _research_and_post(
     is_daily: bool = False,
 ) -> None:
     """
-    Claude 웹 리서치(주) → 크롤러 폴백(부) 순서로 기사를 가져와 게시합니다.
+    Claude 웹 리서치로 기사를 가져와 게시합니다.
     !more 호출 시 오늘 이미 게시된 URL을 Claude에게 전달해 중복 방지합니다.
     """
-
-    # ── 1. Claude 웹 리서치 시도 ────────────────────────────────────────────
+    status_msg = await channel.send("🧠 Claude가 AI 뉴스를 리서치하는 중…")
     articles_to_post = []
-    used_curator = False
 
-    if ANTHROPIC_API_KEY:
-        status_msg = await channel.send("🧠 Claude가 AI 뉴스를 리서치하는 중…")
-        try:
-            exclude   = db.get_todays_posted_urls()
-            prefs     = db.get_all_preferences()
+    try:
+        exclude = db.get_todays_posted_urls()
+        prefs   = db.get_all_preferences()
 
-            raw_articles = await asyncio.to_thread(
-                ai_curator.curate,
-                count,
-                exclude,
-                prefs,
+        raw_articles = await asyncio.to_thread(
+            ai_curator.curate,
+            count,
+            exclude,
+            prefs,
+        )
+
+        if raw_articles:
+            new_count = sum(1 for a in raw_articles if db.upsert_article(a.to_dict()))
+            await status_msg.edit(
+                content=f"✅ Claude 리서치 완료 — {len(raw_articles)}개 선정 ({new_count}개 신규)"
             )
-
-            if raw_articles:
-                new_count = sum(1 for a in raw_articles if db.upsert_article(a.to_dict()))
-                await status_msg.edit(
-                    content=f"✅ Claude 리서치 완료 — {len(raw_articles)}개 선정 ({new_count}개 신규)"
-                )
-                pending = db.get_pending_articles(limit=count + 10)
-                articles_to_post = rank_articles(pending)[:count]
-                used_curator = True
-            else:
-                await status_msg.edit(content="⚠️ Claude 리서치 결과 없음 — 크롤러로 폴백합니다.")
-
-        except Exception as e:
-            await status_msg.edit(content=f"⚠️ Claude 리서치 실패 (`{e}`) — 크롤러로 폴백합니다.")
-
-    # ── 2. 크롤러 폴백 ──────────────────────────────────────────────────────
-    if not articles_to_post:
-        status_msg = await channel.send("🔍 크롤러로 AI 뉴스 수집 중…")
-        try:
-            raw = await asyncio.to_thread(crawlers.crawl_all)
-            new = sum(1 for a in raw if db.upsert_article(a.to_dict()))
-            await status_msg.edit(content=f"✅ 크롤링 완료 — {len(raw)}개 수집 ({new}개 신규)")
-            pending = db.get_pending_articles(limit=count + 20)
+            pending = db.get_pending_articles(limit=count + 10)
             articles_to_post = rank_articles(pending)[:count]
-        except Exception as e:
-            await status_msg.edit(content=f"❌ 크롤링 실패: {e}")
-            return
+        else:
+            await status_msg.edit(content="⚠️ Claude 리서치 결과가 없습니다.")
+
+    except Exception as e:
+        await status_msg.edit(content=f"❌ Claude 리서치 실패: {e}")
+        return
 
     if not articles_to_post:
         await channel.send("📭 게시할 새 기사가 없습니다.")
@@ -220,15 +200,14 @@ async def _research_and_post(
     # ── 3. 헤더 메시지 ──────────────────────────────────────────────────────
     if is_daily:
         today = datetime.datetime.now(tz=KST).strftime("%Y년 %m월 %d일")
-        badge = "🧠 Claude 리서치" if used_curator else "🔍 크롤러"
         await channel.send(
-            f"## 🤖 {today} AI 뉴스 브리핑  [{badge}]\n"
+            f"## 🤖 {today} AI 뉴스 브리핑  [🧠 Claude 리서치]\n"
             f"오늘의 주요 AI 소식 **{len(articles_to_post)}개**입니다."
         )
 
     # ── 4. 기사 임베드 게시 ─────────────────────────────────────────────────
     for article in articles_to_post:
-        embed = _make_embed(article, is_ai_curated=used_curator)
+        embed = _make_embed(article, is_ai_curated=True)
         msg = await channel.send(embed=embed)
         await msg.add_reaction(LIKE)
         await msg.add_reaction(DISLIKE)
@@ -260,8 +239,7 @@ async def cmd_stats(ctx: commands.Context):
 
     embed = discord.Embed(title="📊 AINewsCrawlBot 통계", color=discord.Color.green())
 
-    mode = "🧠 Claude 웹 리서치" if ANTHROPIC_API_KEY else "🔍 크롤러 폴백"
-    embed.add_field(name="현재 모드", value=mode, inline=False)
+    embed.add_field(name="현재 모드", value="🧠 Claude 웹 리서치", inline=False)
 
     embed.add_field(
         name="기사 현황",

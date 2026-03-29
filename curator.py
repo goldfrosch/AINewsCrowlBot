@@ -72,6 +72,10 @@ _TOPICS: list[tuple[str, str]] = [
     ),
 ]
 
+# ─── Ralph Loop 활성화 플래그 ────────────────────────────────────────────────
+# 임시 비활성화 시 False로 설정 → curate() 호출 시 빈 리스트 반환
+RALPH_LOOP_ENABLED = False
+
 # ─── 시스템 프롬프트 ──────────────────────────────────────────────────────────
 
 _SYSTEM_RESEARCH = """\
@@ -318,6 +322,10 @@ def curate(
     Returns:
         Article 리스트 (len ≤ target_count)
     """
+    if not RALPH_LOOP_ENABLED:
+        print("[Curator] Ralph Loop 비활성화 상태 — 빈 리스트 반환")
+        return []
+
     if not ANTHROPIC_API_KEY:
         raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
 
