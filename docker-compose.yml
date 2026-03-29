@@ -1,0 +1,15 @@
+services:
+  bot:
+    build: .
+    container_name: ainewsbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # SQLite DB 파일을 호스트에 유지 (컨테이너 재시작해도 데이터 보존)
+      - ./data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
