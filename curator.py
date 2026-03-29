@@ -15,6 +15,7 @@ import anthropic
 
 from crawlers.base import Article
 from config import ANTHROPIC_API_KEY
+import token_tracker
 
 # ─── 라운드별 리서치 토픽 ────────────────────────────────────────────────────
 # (name, search_instruction)  — 순서대로 각 라운드에 배정됨
@@ -194,6 +195,11 @@ def _research_round(
             messages=[{"role": "user", "content": "\n".join(lines)}],
         ) as stream:
             response = stream.get_final_message()
+        token_tracker.log_token_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            caller=f"curator_research_r{round_num}_{topic_name}",
+        )
 
     except anthropic.RateLimitError:
         print(f"[Curator] R{round_num} ({topic_name}): RateLimit — 30초 대기 후 재시도")
@@ -207,6 +213,11 @@ def _research_round(
                 messages=[{"role": "user", "content": "\n".join(lines)}],
             ) as stream:
                 response = stream.get_final_message()
+            token_tracker.log_token_usage(
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+                caller=f"curator_research_r{round_num}_{topic_name}_retry",
+            )
         except Exception as e:
             print(f"[Curator] R{round_num} ({topic_name}): 재시도 실패 → 건너뜀 ({e})")
             return []
@@ -283,6 +294,11 @@ Preserve all original fields. Add or improve `curator_reason` if missing or weak
             max_tokens=8000,
             system=_SYSTEM_SELECT,
             messages=[{"role": "user", "content": prompt}],
+        )
+        token_tracker.log_token_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            caller="curator_select",
         )
         for block in response.content:
             if block.type == "text":

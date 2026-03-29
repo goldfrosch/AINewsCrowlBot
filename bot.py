@@ -20,6 +20,7 @@ from discord.ext import commands, tasks
 
 import database as db
 import curator as ai_curator
+import token_tracker
 from ranker import rank_articles, apply_feedback
 from config import (
     DISCORD_BOT_TOKEN,
@@ -125,6 +126,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     db.init_db()
+    token_tracker.init_token_db()
     print(f"✅ 봇 로그인: {bot.user}  |  채널: {DISCORD_CHANNEL_ID}")
     if not daily_brief.is_running():
         daily_brief.start()
@@ -278,6 +280,80 @@ async def cmd_reset(ctx: commands.Context):
     await ctx.send("✅ 소스 및 키워드 선호도가 초기화되었습니다.")
 
 
+@bot.command(name="tokens")
+async def cmd_tokens(ctx: commands.Context):
+    """오늘의 토큰 사용량, 5시간 윈도우 비교, 전체 일평균을 표시합니다."""
+    today   = token_tracker.get_today_token_stats()
+    window  = token_tracker.get_window_stats()
+    avg     = token_tracker.get_average_daily_stats()
+
+    embed = discord.Embed(title="🔢 Claude 토큰 사용 현황", color=discord.Color.from_rgb(108, 77, 217))
+
+    # 오늘 통계
+    embed.add_field(
+        name="📅 오늘 사용량",
+        value=(
+            f"API 호출: **{today['call_count']}**회\n"
+            f"입력 토큰: **{today['total_input']:,}**\n"
+            f"출력 토큰: **{today['total_output']:,}**\n"
+            f"합계: **{today['total_tokens']:,}**\n"
+            f"호출당 평균: **{today['avg_per_call']:,}**"
+        ),
+        inline=True,
+    )
+
+    # 5시간 윈도우 비교
+    if window["pct_change"] is None:
+        trend = "이전 윈도우 데이터 없음"
+    elif window["pct_change"] > 0:
+        trend = f"▲ +{window['pct_change']}%"
+    elif window["pct_change"] < 0:
+        trend = f"▼ {window['pct_change']}%"
+    else:
+        trend = "→ 변화 없음"
+
+    embed.add_field(
+        name="⏱️ 5시간 윈도우 비교",
+        value=(
+            f"현재 윈도우: **{window['current_tokens']:,}** ({window['current_calls']}회)\n"
+            f"이전 윈도우: **{window['prev_tokens']:,}** ({window['prev_calls']}회)\n"
+            f"증감: **{trend}**"
+        ),
+        inline=True,
+    )
+
+    # 전체 일평균
+    embed.add_field(
+        name="📊 전체 평균",
+        value=(
+            f"측정 기간: **{avg['total_days']}**일\n"
+            f"누적 합계: **{avg['grand_total']:,}**\n"
+            f"일 평균: **{avg['avg_per_day']:,}**\n"
+            f"호출당 평균: **{avg['avg_per_call']:,}**"
+        ),
+        inline=False,
+    )
+
+    # 호출자별 오늘 내역
+    if today["callers"]:
+        lines = [
+            f"• `{c['caller']}`: {c['tokens']:,} tok ({c['calls']}회)"
+            for c in today["callers"][:8]
+        ]
+        embed.add_field(name="🔍 오늘 호출 내역", value="\n".join(lines), inline=False)
+
+    # 최근 7일 일별 사용량
+    if avg["recent_daily"]:
+        lines = [
+            f"• {d['day']}: **{d['tokens']:,}** ({d['calls']}회)"
+            for d in avg["recent_daily"][:7]
+        ]
+        embed.add_field(name="📈 최근 7일", value="\n".join(lines), inline=False)
+
+    embed.set_footer(text="5시간 윈도우 = Anthropic 요금제 롤링 한도 기준")
+    await ctx.send(embed=embed)
+
+
 @bot.command(name="help_ai")
 async def cmd_help(ctx: commands.Context):
     """사용 가능한 명령어 목록을 표시합니다."""
@@ -287,6 +363,7 @@ async def cmd_help(ctx: commands.Context):
         value=(
             "`!more [n]`  — 추가 기사 n개 요청 (기본 5, 최대 10)\n"
             "`!stats`     — 봇 통계 및 선호도 현황\n"
+            "`!tokens`    — Claude 토큰 사용량 (오늘/윈도우/평균)\n"
             "`!help_ai`   — 이 도움말"
         ),
         inline=False,

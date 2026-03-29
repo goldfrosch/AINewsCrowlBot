@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import anthropic
 import database as db
+import token_tracker
 from config import ANTHROPIC_API_KEY, AI_KEYWORDS
 from curator import _research_round, _extract_json_array
 
@@ -188,6 +189,11 @@ Output ONLY a JSON array of the kept articles (preserve all fields, improve cura
             system="You are a strict AI news curator. Output ONLY valid JSON — no explanation.",
             messages=[{"role": "user", "content": prompt}],
         )
+        token_tracker.log_token_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            caller="agent_review",
+        )
         for block in response.content:
             if block.type == "text":
                 kept = _extract_json_array(block.text)
@@ -330,13 +336,20 @@ def run(target_count: int = 5, topics: list[str] | None = None) -> list[dict]:
     preferences: dict = {}
     all_found: list[dict] = []
 
+    loop_step = 0
     while True:
+        loop_step += 1
         response = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=4000,
             system=system_prompt,
             tools=_TOOLS,
             messages=messages,
+        )
+        token_tracker.log_token_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            caller=f"agent_loop_step{loop_step}",
         )
 
         messages.append({"role": "assistant", "content": response.content})
