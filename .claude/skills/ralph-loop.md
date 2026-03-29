@@ -21,7 +21,9 @@ Phase 3: 최종 선별 호출      (web_search 없이 판단만, ~8000 토큰)
 ## Phase 1 — 라운드 설계 원칙
 
 ### 토픽 배정
+
 각 라운드는 서로 다른 토픽에 집중한다:
+
 ```
 R1: models         R6: safety_policy
 R2: company_news   R7: research_labs
@@ -31,12 +33,14 @@ R5: korean_news    R10: hardware_infra
 ```
 
 ### 조기 종료 조건
+
 ```python
 if len(all_raw) >= target_count * 3:
     break  # 목표의 3배 확보 시 조기 종료
 ```
 
 ### 라운드 실패 허용 (핵심)
+
 ```python
 except anthropic.RateLimitError:
     time.sleep(30)
@@ -48,6 +52,7 @@ except anthropic.APIStatusError as e:
 ```
 
 ### 제외 URL 관리
+
 ```python
 all_excluded = list(set(exclude_urls) | already_found_urls)
 # exclude_urls: 오늘 이미 Discord에 게시된 URL
@@ -84,21 +89,23 @@ response = client.messages.create(
 ## 새 토픽 추가 방법
 
 `curator.py`의 `_TOPICS` 리스트에 튜플 추가:
+
 ```python
 _TOPICS: list[tuple[str, str]] = [
     ("topic_name", "Search instruction for this topic area..."),
     ...
 ]
 ```
+
 - 최대 10개 (MAX_ROUNDS 기본값과 맞춤)
 - 토픽이 10개 이하면 라운드 수 = 토픽 수
 
 ## 파라미터 조정 기준
 
-| 파라미터 | 기본값 | 조정 기준 |
-|---------|--------|----------|
-| `max_rounds` | 10 | API 비용 절감 시 줄임 |
-| `per_round_count` | `max(3, target//2)` | 라운드당 수집 밀도 |
-| `target_count * 3` | 조기종료 임계값 | 후보 다양성 vs 속도 |
-| 라운드간 `sleep` | 1초 | rate limit 여유 |
-| RateLimit 재시도 대기 | 30초 | 새벽 부하 상황 맞춤 |
+| 파라미터              | 기본값              | 조정 기준             |
+| --------------------- | ------------------- | --------------------- |
+| `max_rounds`          | 10                  | API 비용 절감 시 줄임 |
+| `per_round_count`     | `max(3, target//2)` | 라운드당 수집 밀도    |
+| `target_count * 3`    | 조기종료 임계값     | 후보 다양성 vs 속도   |
+| 라운드간 `sleep`      | 1초                 | rate limit 여유       |
+| RateLimit 재시도 대기 | 30초                | 새벽 부하 상황 맞춤   |

@@ -14,7 +14,7 @@ import time
 import anthropic
 
 from crawlers.base import Article
-from config import ANTHROPIC_API_KEY
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 import token_tracker
 
 # ─── 라운드별 리서치 토픽 ────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ _TOPICS: list[tuple[str, str]] = [
 ]
 
 # ─── Ralph Loop 활성화 플래그 ────────────────────────────────────────────────
-# 임시 비활성화 시 False로 설정 → curate() 호출 시 빈 리스트 반환
+# False → 단일 프롬프트 호출(웹 검색 1회)로 대체  /  True → 다중 라운드 루프
 RALPH_LOOP_ENABLED = False
 
 # ─── 시스템 프롬프트 ──────────────────────────────────────────────────────────
@@ -188,7 +188,7 @@ def _research_round(
 
     try:
         with client.messages.stream(
-            model="claude-opus-4-6",
+            model=CLAUDE_MODEL,
             max_tokens=4000,
             tools=[{"type": "web_search_20260209", "name": "web_search"}],
             system=_SYSTEM_RESEARCH,
@@ -206,7 +206,7 @@ def _research_round(
         time.sleep(30)
         try:
             with client.messages.stream(
-                model="claude-opus-4-6",
+                model=CLAUDE_MODEL,
                 max_tokens=4000,
                 tools=[{"type": "web_search_20260209", "name": "web_search"}],
                 system=_SYSTEM_RESEARCH,
@@ -290,7 +290,7 @@ Preserve all original fields. Add or improve `curator_reason` if missing or weak
 
     try:
         response = client.messages.create(
-            model="claude-opus-4-6",
+            model=CLAUDE_MODEL,
             max_tokens=8000,
             system=_SYSTEM_SELECT,
             messages=[{"role": "user", "content": prompt}],
@@ -310,6 +310,71 @@ Preserve all original fields. Add or improve `curator_reason` if missing or weak
         print(f"[Curator] 최종 선별 실패: {e} — 수집 순서대로 상위 {target_count}개 반환")
 
     return candidates[:target_count]
+
+
+# ─── 단일 호출 모드 (RALPH_LOOP_ENABLED = False) ─────────────────────────────
+
+def _single_research(
+    client: anthropic.Anthropic,
+    count: int,
+    exclude_urls: list[str],
+    preferences: dict,
+) -> list[Article]:
+    """
+    웹 검색 1회 호출로 AI 뉴스를 수집합니다.
+    Ralph Loop 비활성화 시 폴백으로 사용됩니다.
+    """
+    liked_kws = [k["keyword"] for k in preferences.get("keywords", []) if k["multiplier"] > 1.1][:5]
+    pref_hint = f"\nUser enjoys these topics: {', '.join(liked_kws)}" if liked_kws else ""
+
+    lines = [
+        f"Find the {count} most important AI news articles published in the last 48 hours.",
+        "Cover a diverse mix: model releases, company news, research papers, developer tools, and Korean AI news.",
+        pref_hint,
+        "Requirements: real news only, no listicles, no sponsored content.",
+        "Run 2–4 targeted searches, then output JSON.",
+        "",
+    ]
+
+    if exclude_urls:
+        lines.append("Skip these URLs (already posted):")
+        for url in exclude_urls[:40]:
+            lines.append(f"- {url}")
+        lines.append("")
+
+    lines += [
+        f"Output a JSON array of exactly {count} items:",
+        '[{"url":"...","title":"...","source":"...","description":"2-3 sentences","author":"","published_at":"YYYY-MM-DD","curator_reason":"one sentence"}]',
+        "If nothing found: []",
+    ]
+
+    try:
+        with client.messages.stream(
+            model=CLAUDE_MODEL,
+            max_tokens=4000,
+            tools=[{"type": "web_search_20260209", "name": "web_search"}],
+            system=_SYSTEM_RESEARCH,
+            messages=[{"role": "user", "content": "\n".join(lines)}],
+        ) as stream:
+            response = stream.get_final_message()
+
+        token_tracker.log_token_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            caller="curator_single",
+        )
+
+        for block in response.content:
+            if block.type == "text":
+                data = _extract_json_array(block.text)
+                if data:
+                    print(f"[Curator] 단일 호출 완료: {len(data)}개 수집")
+                    return _to_articles(data[:count])
+
+    except Exception as e:
+        print(f"[Curator] 단일 호출 실패: {e}")
+
+    return []
 
 
 # ─── 공개 API ─────────────────────────────────────────────────────────────────
@@ -339,8 +404,11 @@ def curate(
         Article 리스트 (len ≤ target_count)
     """
     if not RALPH_LOOP_ENABLED:
-        print("[Curator] Ralph Loop 비활성화 상태 — 빈 리스트 반환")
-        return []
+        print("[Curator] Ralph Loop 비활성화 상태 — 단일 호출 모드로 실행")
+        if not ANTHROPIC_API_KEY:
+            raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        return _single_research(client, target_count, exclude_urls or [], preferences or {})
 
     if not ANTHROPIC_API_KEY:
         raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")

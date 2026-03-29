@@ -11,6 +11,7 @@ DISCORD_CHANNEL_ID: int = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 # 설정 시: Claude 웹 리서치로 뉴스 큐레이션 (권장)
 # 미설정 시: 기존 크롤러로 폴백
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 
 # ── 외부 API 키 (크롤러 폴백용) ───────────────────
 YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
