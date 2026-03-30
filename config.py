@@ -7,6 +7,13 @@ load_dotenv()
 DISCORD_BOT_TOKEN: str = os.getenv("DISCORD_BOT_TOKEN", "")
 DISCORD_CHANNEL_ID: int = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 
+# 관리자 명령어를 허용할 특정 유저 ID 목록 (쉼표로 구분)
+# 예: ALLOWED_USER_IDS=123456789,987654321
+_raw_ids = os.getenv("ALLOWED_USER_IDS", "")
+ALLOWED_USER_IDS: set[int] = {
+    int(uid.strip()) for uid in _raw_ids.split(",") if uid.strip().isdigit()
+}
+
 # ── Claude (주 리서치 엔진) ───────────────────────
 # 설정 시: Claude 웹 리서치로 뉴스 큐레이션 (권장)
 # 미설정 시: 기존 크롤러로 폴백

@@ -29,6 +29,7 @@ from config import (
     MORE_ARTICLES_MAX,
     DAILY_POST_HOUR,
     TIMEZONE,
+    ALLOWED_USER_IDS,
 )
 
 KST = ZoneInfo(TIMEZONE)
@@ -217,6 +218,19 @@ async def _research_and_post(
         await asyncio.sleep(0.5)
 
 
+# ─── 권한 체크 ────────────────────────────────────────────────────────────────
+
+def is_admin_or_allowed():
+    """관리자이거나 ALLOWED_USER_IDS에 포함된 유저면 통과."""
+    async def predicate(ctx: commands.Context) -> bool:
+        if ctx.author.id in ALLOWED_USER_IDS:
+            return True
+        if ctx.guild and ctx.author.guild_permissions.administrator:
+            return True
+        raise commands.MissingPermissions(["administrator"])
+    return commands.check(predicate)
+
+
 # ─── 명령어 ───────────────────────────────────────────────────────────────────
 
 @bot.command(name="more")
@@ -227,7 +241,7 @@ async def cmd_more(ctx: commands.Context, count: int = ARTICLES_PER_POST):
 
 
 @bot.command(name="crawl")
-@commands.has_permissions(administrator=True)
+@is_admin_or_allowed()
 async def cmd_crawl(ctx: commands.Context):
     """즉시 브리핑을 실행합니다. (관리자 전용)"""
     await _research_and_post(ctx.channel, count=ARTICLES_PER_POST, is_daily=True)
@@ -273,7 +287,7 @@ async def cmd_stats(ctx: commands.Context):
 
 
 @bot.command(name="reset")
-@commands.has_permissions(administrator=True)
+@is_admin_or_allowed()
 async def cmd_reset(ctx: commands.Context):
     """선호도 데이터를 초기화합니다. (관리자 전용)"""
     db.reset_preferences()
