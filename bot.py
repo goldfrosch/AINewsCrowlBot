@@ -22,11 +22,14 @@ import database as db
 import curator as ai_curator
 import token_tracker
 from ranker import rank_articles, apply_feedback
+from agents import news_curation_agent
+from agents.preference_analysis import run_preference_analysis, save_preference_profile, load_preference_profile
 from config import (
     DISCORD_BOT_TOKEN,
     DISCORD_CHANNEL_ID,
     ARTICLES_PER_POST,
     MORE_ARTICLES_MAX,
+    PREFERENCE_ANALYSIS_HOUR,
     DAILY_POST_HOUR,
     TIMEZONE,
     ALLOWED_USER_IDS,
@@ -129,9 +132,11 @@ async def on_ready():
     db.init_db()
     token_tracker.init_token_db()
     print(f"✅ 봇 로그인: {bot.user}  |  채널: {DISCORD_CHANNEL_ID}")
+    if not daily_preference_analysis.is_running():
+        daily_preference_analysis.start()
     if not daily_brief.is_running():
         daily_brief.start()
-    print(f"📅 매일 {DAILY_POST_HOUR:02d}:00 KST 자동 브리핑 등록")
+    print(f"📅 매일 {PREFERENCE_ANALYSIS_HOUR:02d}:00 KST 선호도 분석 / {DAILY_POST_HOUR:02d}:00 KST 브리핑 등록")
 
 
 @bot.event
@@ -147,6 +152,18 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 
 # ─── 스케줄 작업 ──────────────────────────────────────────────────────────────
+
+@tasks.loop(time=datetime.time(hour=PREFERENCE_ANALYSIS_HOUR, minute=0, tzinfo=KST))
+async def daily_preference_analysis():
+    """새벽 2시: 선호도 심층 분석 → data/preference_profile.json 저장."""
+    print("[선호도 분석] 시작…")
+    try:
+        analysis = await asyncio.to_thread(run_preference_analysis)
+        profile  = await asyncio.to_thread(save_preference_profile, analysis)
+        print(f"[선호도 분석] 완료 — {analysis['summary']}")
+    except Exception as e:
+        print(f"[선호도 분석] 오류: {e}")
+
 
 @tasks.loop(time=datetime.time(hour=DAILY_POST_HOUR, minute=0, tzinfo=KST))
 async def daily_brief():
@@ -172,28 +189,40 @@ async def _research_and_post(
     articles_to_post = []
 
     try:
-        exclude = db.get_todays_posted_urls()
-        prefs   = db.get_all_preferences()
+        # 새벽 2시에 저장된 선호도 프로파일 로드 (없으면 None)
+        pref_profile = load_preference_profile()
+        if pref_profile:
+            print(f"[브리핑] 선호도 프로파일 로드 — {pref_profile.get('summary', '')}")
 
         raw_articles = await asyncio.to_thread(
-            ai_curator.curate,
+            news_curation_agent.run,
             count,
-            exclude,
-            prefs,
+            None,           # topics: 기본값 사용
+            pref_profile,   # external_preferences
         )
 
         if raw_articles:
-            new_count = sum(1 for a in raw_articles if db.upsert_article(a.to_dict()))
+            new_count = sum(1 for a in raw_articles if db.upsert_article({
+                "url":           a.get("url", ""),
+                "title":         a.get("title", "제목 없음"),
+                "source":        a.get("source", "Unknown"),
+                "description":   a.get("description", ""),
+                "author":        a.get("author", ""),
+                "image_url":     a.get("image_url", ""),
+                "published_at":  a.get("published_at", ""),
+                "platform_score": 100,
+                "keywords":      "[]",
+            }))
             await status_msg.edit(
-                content=f"✅ Claude 리서치 완료 — {len(raw_articles)}개 선정 ({new_count}개 신규)"
+                content=f"✅ Claude 에이전트 큐레이션 완료 — {len(raw_articles)}개 선정 ({new_count}개 신규)"
             )
             pending = db.get_pending_articles(limit=count + 10)
             articles_to_post = rank_articles(pending)[:count]
         else:
-            await status_msg.edit(content="⚠️ Claude 리서치 결과가 없습니다.")
+            await status_msg.edit(content="⚠️ Claude 에이전트 큐레이션 결과가 없습니다.")
 
     except Exception as e:
-        await status_msg.edit(content=f"❌ Claude 리서치 실패: {e}")
+        await status_msg.edit(content=f"❌ Claude 에이전트 실패: {e}")
         return
 
     if not articles_to_post:

@@ -305,13 +305,19 @@ _TOOLS = [
 
 # ── 에이전트 메인 루프 ─────────────────────────────────────────────────────────
 
-def run(target_count: int = 5, topics: list[str] | None = None) -> list[dict]:
+def run(
+    target_count: int = 5,
+    topics: list[str] | None = None,
+    external_preferences: dict | None = None,
+) -> list[dict]:
     """
     뉴스 큐레이션 에이전트를 실행한다.
 
     Args:
-        target_count: 최종 선별 기사 수
-        topics:       탐색할 토픽 목록 (None이면 기본 5개)
+        target_count:         최종 선별 기사 수
+        topics:               탐색할 토픽 목록 (None이면 기본 5개)
+        external_preferences: 새벽 2시 선호도 분석으로 미리 생성된 프로파일.
+                              있으면 analyze_preferences 도구 결과를 이것으로 대체한다.
 
     Returns:
         선별된 기사 딕셔너리 목록
@@ -328,6 +334,24 @@ def run(target_count: int = 5, topics: list[str] | None = None) -> list[dict]:
         topics_list=", ".join(topics),
     )
 
+    # external_preferences가 있으면 에이전트 user 메시지에 힌트를 포함한다
+    hints_text = ""
+    if external_preferences:
+        hints = external_preferences.get("curation_hints", {})
+        if hints and not hints.get("cold_start"):
+            boost  = ", ".join(hints.get("boost_sources",  [])[:5]) or "없음"
+            avoid  = ", ".join(hints.get("avoid_sources",  [])[:5]) or "없음"
+            focus  = ", ".join(hints.get("focus_keywords", [])[:8]) or "없음"
+            window = hints.get("data_window", "")
+            conf   = hints.get("confidence", "")
+            hints_text = (
+                f"\n\n[사전 분석된 선호도 프로파일 — {window}, 신뢰도: {conf}]\n"
+                f"• 선호 소스: {boost}\n"
+                f"• 비선호 소스: {avoid}\n"
+                f"• 집중 키워드: {focus}"
+            )
+            print(f"[Agent] 외부 선호도 프로파일 적용 — {window}, 신뢰도: {conf}")
+
     messages: list[dict] = [
         {
             "role": "user",
@@ -335,6 +359,7 @@ def run(target_count: int = 5, topics: list[str] | None = None) -> list[dict]:
                 f"AI 뉴스를 큐레이션해주세요. "
                 f"탐색 토픽: {', '.join(topics)}. "
                 f"최종 {target_count}개 기사를 선별해 JSON 배열로 반환하세요."
+                + hints_text
             ),
         }
     ]
@@ -392,6 +417,14 @@ def run(target_count: int = 5, topics: list[str] | None = None) -> list[dict]:
 
             if name == "analyze_preferences":
                 result = _tool_analyze_preferences()
+                # 외부 선호도 프로파일이 있으면 curation_hints로 필드를 보강한다
+                if external_preferences:
+                    hints = external_preferences.get("curation_hints", {})
+                    if hints:
+                        result["liked_sources"]    = hints.get("boost_sources",  result["liked_sources"])
+                        result["disliked_sources"]  = hints.get("avoid_sources",   result["disliked_sources"])
+                        result["liked_keywords"]    = hints.get("focus_keywords",  result["liked_keywords"])
+                        result["summary"] += f" [외부 프로파일 적용: {hints.get('data_window', '')}]"
                 preferences = result
                 print(f" → {result['summary']}")
 
