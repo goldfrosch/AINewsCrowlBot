@@ -17,6 +17,8 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
 # 프로젝트 루트를 sys.path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -26,28 +28,41 @@ import token_tracker
 from config import ANTHROPIC_API_KEY, AI_KEYWORDS, CLAUDE_MODEL
 from curator import _research_round, _extract_json_array
 
-# ── 상수 ──────────────────────────────────────────────────────────────────────
+# ── 에이전트 문서 로더 ─────────────────────────────────────────────────────────
 
-_DEFAULT_TOPICS = [
-    "models",
-    "company_news",
-    "arxiv_papers",
-    "dev_tools",
-    "korean_news",
-]
+_AGENT_DOC_PATH = Path(__file__).resolve().parent.parent / ".claude" / "agents" / "news-curation-agent.md"
 
-_TOPIC_DESC: dict[str, str] = {
-    "models":        "Latest AI model releases, benchmark results, and evaluations in the last 48h.",
-    "company_news":  "AI company announcements: funding, product launches, partnerships (last 48h).",
-    "arxiv_papers":  "Notable ArXiv preprints in cs.AI, cs.LG, cs.CL submitted in the last 48h.",
-    "dev_tools":     "New AI developer tools, open-source releases, frameworks launched this week.",
-    "korean_news":   "한국어 AI 뉴스 — 최근 48시간 이내 인공지능 관련 소식. 출처: IT조선, AI타임스, ZDNet Korea.",
-    "safety_policy": "AI safety, alignment, ethics, and government policy news (last 48h).",
-    "research_labs": "Research breakthroughs from DeepMind, FAIR, Stanford HAI, MIT CSAIL (last 48h).",
-    "applications":  "Real-world AI applications: robotics, healthcare, coding assistants (last 48h).",
-    "community_buzz":"Viral AI discussions and trending HackerNews AI threads (last 24h).",
-    "hardware_infra":"AI hardware: GPU/TPU/NPU releases, data center investments (last 48h).",
-}
+def _load_agent_spec() -> dict:
+    """
+    .claude/agents/news-curation-agent.md 에서 설정과 시스템 프롬프트 템플릿을 로드한다.
+
+    반환 키:
+        topics           — dict[str, str]  토픽명 → 설명
+        default_topics   — list[str]       기본 탐색 토픽 목록
+        system_prompt_template — str       {target_count}, {topics_list} 플레이스홀더 포함
+    """
+    text = _AGENT_DOC_PATH.read_text(encoding="utf-8")
+
+    # YAML 프론트매터 분리
+    match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.DOTALL)
+    if not match:
+        raise ValueError(f"에이전트 문서 형식 오류: {_AGENT_DOC_PATH}")
+
+    frontmatter = yaml.safe_load(match.group(1))
+    system_prompt_template = match.group(2).strip()
+
+    return {
+        "topics":                   frontmatter.get("topics", {}),
+        "default_topics":           frontmatter.get("default_topics", []),
+        "system_prompt_template":   system_prompt_template,
+    }
+
+
+# ── 에이전트 문서에서 상수 로드 ───────────────────────────────────────────────
+
+_AGENT_SPEC    = _load_agent_spec()
+_TOPIC_DESC: dict[str, str] = _AGENT_SPEC["topics"]
+_DEFAULT_TOPICS: list[str]  = _AGENT_SPEC["default_topics"]
 
 _SPAM_RE = re.compile(
     r"\b(sponsored|advertisement|buy now|sign up|subscribe|promo code|affiliate)\b",
@@ -306,18 +321,10 @@ def run(target_count: int = 5, topics: list[str] | None = None) -> list[dict]:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     collected: set[str] = set()   # 이미 수집한 URL 추적
 
-    system_prompt = f"""당신은 AI 뉴스 큐레이션 전문 에이전트입니다.
-아래 순서로 도구를 호출해 고품질 AI 기사 {target_count}개를 선별하세요:
-
-1. analyze_preferences → 사용자 선호도 파악
-2. find_ai_articles → 다음 토픽별로 각각 호출: {', '.join(topics)}
-3. review_articles → 모든 수집 기사를 한 번에 검토·선별
-4. 최종 선별된 기사 목록을 JSON 배열로 출력
-
-주의:
-- find_ai_articles는 토픽마다 별도로 호출하세요
-- review_articles는 모든 탐색이 끝난 뒤 한 번만 호출하세요
-- 최종 출력은 반드시 JSON 배열이어야 합니다"""
+    system_prompt = _AGENT_SPEC["system_prompt_template"].format(
+        target_count=target_count,
+        topics_list=", ".join(topics),
+    )
 
     messages: list[dict] = [
         {

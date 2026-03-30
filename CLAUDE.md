@@ -47,13 +47,13 @@ python main.py
 
 이 프로젝트 작업 시 아래 스킬 문서를 참조한다.
 
-| 파일 | 언제 사용 |
-|------|-----------|
-| [`.claude/skills/claude-api.md`](.claude/skills/claude-api.md) | Anthropic SDK 호출·모델·스트리밍·에러 처리 |
-| [`.claude/skills/ralph-loop.md`](.claude/skills/ralph-loop.md) | `curator.py` 다중 라운드 리서치 패턴 수정 |
-| [`.claude/skills/discord-bot.md`](.claude/skills/discord-bot.md) | `bot.py` 이벤트·임베드·커맨드·반응 처리 |
-| [`.claude/skills/sqlite-ops.md`](.claude/skills/sqlite-ops.md) | `database.py` 스키마·쿼리·선호도 업데이트 |
-| [`.claude/skills/mcp-builder.md`](.claude/skills/mcp-builder.md) | MCP 인터페이스 추가 시 |
-| [`.claude/skills/preference-analyzer.md`](.claude/skills/preference-analyzer.md) | DB 선호도 읽기·쓰기·프롬프트 주입 패턴 |
-| [`.claude/skills/article-finder.md`](.claude/skills/article-finder.md) | 웹 검색 기반 AI 기사 탐색 패턴 |
-| [`.claude/skills/article-reviewer.md`](.claude/skills/article-reviewer.md) | 기사 품질 검토·필터링·랭킹 파이프라인 |
+| 파일                                                                             | 언제 사용                                  |
+| -------------------------------------------------------------------------------- | ------------------------------------------ |
+| [`.claude/skills/claude-api.md`](.claude/skills/claude-api.md)                   | Anthropic SDK 호출·모델·스트리밍·에러 처리 |
+| [`.claude/skills/ralph-loop.md`](.claude/skills/ralph-loop.md)                   | `curator.py` 다중 라운드 리서치 패턴 수정  |
+| [`.claude/skills/discord-bot.md`](.claude/skills/discord-bot.md)                 | `bot.py` 이벤트·임베드·커맨드·반응 처리    |
+| [`.claude/skills/sqlite-ops.md`](.claude/skills/sqlite-ops.md)                   | `database.py` 스키마·쿼리·선호도 업데이트  |
+| [`.claude/skills/mcp-builder.md`](.claude/skills/mcp-builder.md)                 | MCP 인터페이스 추가 시                     |
+| [`.claude/skills/preference-analyzer.md`](.claude/skills/preference-analyzer.md) | DB 선호도 읽기·쓰기·프롬프트 주입 패턴     |
+| [`.claude/skills/article-finder.md`](.claude/skills/article-finder.md)           | 웹 검색 기반 AI 기사 탐색 패턴             |
+| [`.claude/skills/article-reviewer.md`](.claude/skills/article-reviewer.md)       | 기사 품질 검토·필터링·랭킹 파이프라인      |
