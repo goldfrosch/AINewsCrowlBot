@@ -5,112 +5,57 @@ description: Discord.py 2.x patterns for this bot. Use when modifying bot.py —
 
 # Discord Bot — discord.py 2.x 패턴
 
-이 프로젝트 `bot.py`의 핵심 구조 및 패턴 레퍼런스.
+`bot.py`의 핵심 구조 및 수정 시 참고 레퍼런스.
 
-## 봇 설정
+## 인텐트 설정
 
-```python
-intents = discord.Intents.default()
-intents.message_content = True   # 메시지 내용 읽기
-intents.reactions = True          # 반응 이벤트 수신
+`message_content` + `reactions` 인텐트가 필수. `bot.py` 상단 참조.
 
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-```
+## 이벤트 구조
 
-## 이벤트 패턴
+| 이벤트 | 위치 | 역할 |
+|--------|------|------|
+| `on_ready` | `bot.py` | DB 초기화, 스케줄러 시작 (중복 시작 방지 포함) |
+| `on_raw_reaction_add` | `bot.py` | 👍/👎 피드백 처리 |
 
-### on_ready
-```python
-@bot.event
-async def on_ready():
-    db.init_db()                    # DB 초기화 (멱등)
-    if not daily_brief.is_running():
-        daily_brief.start()         # 중복 시작 방지
-```
+**`on_raw_reaction_add` 사용 이유**: `on_reaction_add`는 캐시에 있는 메시지만 처리하지만, `on_raw_reaction_add`는 캐시 밖 오래된 메시지의 반응도 수신 가능.
 
-### 반응 이벤트 (👍/👎 피드백)
-```python
-@bot.event
-async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if payload.user_id == bot.user.id:
-        return                       # 봇 자신의 반응 무시
-    emoji = str(payload.emoji)
-    if emoji not in ("👍", "👎"):
-        return
-    # message_id로 DB에서 기사 찾아 선호도 업데이트
-    apply_feedback(str(payload.message_id), emoji == "👍")
-```
+피드백 흐름: `payload.message_id` → `db.get_article_by_message_id()` → `ranker.apply_feedback()`.
 
-> `on_reaction_add` 대신 `on_raw_reaction_add` 사용 이유:
-> 캐시에 없는 오래된 메시지의 반응도 수신 가능
+## 임베드 색상 규칙
 
-## 임베드 구성
+| 색상 | RGB | 용도 |
+|------|-----|------|
+| 보라 | `(108, 77, 217)` | Claude 큐레이션 |
+| 파랑 | `(0, 112, 255)` | 한국어 소스 |
+| 주황 | `Color.orange()` | 일반 크롤러 폴백 |
 
-```python
-embed = discord.Embed(
-    title=f"{emoji} {title[:250]}",
-    url=article["url"],
-    color=discord.Color.from_rgb(108, 77, 217),  # 보라: Claude 큐레이션
-)
-embed.description = summary[:400]
-embed.add_field(name="출처", value=source, inline=True)
-embed.set_footer(text="👍 좋아요  /  👎 별로예요")
-```
+임베드 구성: `bot.py` `_build_embed()` 참조.
 
-색상 규칙:
-- `(108, 77, 217)` 보라 — Claude 큐레이션
-- `(0, 112, 255)` 파랑 — 한국어 소스
-- `Color.orange()` — 일반 크롤러
+## 정기 작업
 
-## 정기 작업 (KST 기준)
-
-```python
-from zoneinfo import ZoneInfo
-
-KST = ZoneInfo("Asia/Seoul")
-
-@tasks.loop(time=datetime.time(hour=3, minute=0, tzinfo=KST))
-async def daily_brief():
-    channel = bot.get_channel(DISCORD_CHANNEL_ID)
-    await _research_and_post(channel, count=5, is_daily=True)
-```
+`tasks.loop(time=...)` + `ZoneInfo("Asia/Seoul")`로 KST 기준 매일 03:00 실행.
+구현: `bot.py` `daily_brief()` 참조.
 
 ## 비동기 + 동기 브리지
 
-Claude API / 크롤러 등 동기 함수를 async 컨텍스트에서 실행:
-```python
-raw_articles = await asyncio.to_thread(
-    ai_curator.curate,
-    count,
-    exclude_urls,
-    prefs,
-)
-```
+Claude API / 크롤러 등 동기 함수를 async 컨텍스트에서 실행할 때는 `asyncio.to_thread()` 사용.
+구현: `bot.py` `_research_and_post()` 참조.
 
-## 커맨드 구조
+## 커맨드 목록
 
-```python
-@bot.command(name="more")
-async def cmd_more(ctx, count: int = 5):
-    count = max(1, min(count, 10))   # 범위 클램핑
-    await _research_and_post(ctx.channel, count=count)
+| 커맨드 | 권한 | 동작 |
+|--------|------|------|
+| `!more [count]` | 일반 | 즉시 큐레이션 후 게시 (1–10개) |
+| `!reset` | 관리자 | 선호도 전체 초기화 |
+| `!stats` | 일반 | 기사 통계 출력 |
 
-@bot.command(name="reset")
-@commands.has_permissions(administrator=True)  # 관리자 전용
-async def cmd_reset(ctx):
-    db.reset_preferences()
-    await ctx.send("✅ 초기화 완료")
-```
+## 게시 후 처리 순서
 
-## 게시 후 반응 추가 패턴
-
-```python
-msg = await channel.send(embed=embed)
-await msg.add_reaction("👍")
-await msg.add_reaction("👎")
-db.mark_as_posted(article["id"], str(msg.id), str(channel.id))
-await asyncio.sleep(0.5)  # Discord rate limit 방지
-```
+1. `channel.send(embed=embed)` — 메시지 전송
+2. `msg.add_reaction("👍")` / `msg.add_reaction("👎")` — 반응 추가
+3. `db.mark_as_posted(article_id, msg_id, channel_id)` — DB 상태 갱신
+4. `asyncio.sleep(0.5)` — Discord rate limit 방지
 
 ## 환경변수 필수값
 

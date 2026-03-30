@@ -11,27 +11,14 @@ description: 웹 검색으로 AI 도구 실용 아티클을 탐색하는 패턴.
 
 ---
 
-## 1. 단일 라운드 직접 호출
+## 1. 핵심 함수
 
-```python
-import anthropic
-from curator import _research_round
-from database import get_todays_posted_urls
-from config import ANTHROPIC_API_KEY
+**`curator._research_round(client, round_num, topic_name, topic_desc, exclude_urls, already_found_urls, count)`**
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-articles = _research_round(
-    client=client,
-    round_num=1,
-    topic_name="claude_code_tips",
-    topic_desc="Articles and tutorials about using Claude Code CLI effectively: tips, workflows, hooks, MCP servers.",
-    exclude_urls=get_todays_posted_urls(),   # 오늘 이미 게시된 URL 제외
-    already_found_urls=set(),
-    count=5,
-)
-# 반환: list[dict] — url, title, source, description, author, published_at, curator_reason
-```
+- `exclude_urls`: `db.get_todays_posted_urls()`로 오늘 이미 게시된 URL 제외
+- `already_found_urls`: 현재 루프에서 수집한 URL 집합 (라운드 간 중복 방지)
+- `count`: 이 라운드에서 목표할 기사 수
+- 반환: `list[dict]` — 실패 시 `[]` 반환 (예외 흡수)
 
 ---
 
@@ -52,108 +39,25 @@ articles = _research_round(
 
 ---
 
-## 3. 커스텀 토픽으로 탐색
+## 3. 반환 아티클 필드
 
-특정 주제를 찾을 때는 `topic_desc`를 자유롭게 구성한다:
+| 필드 | 설명 |
+|------|------|
+| `url` | 기사 URL |
+| `title` | 제목 |
+| `source` | 출처 (예: "Simon Willison's Weblog") |
+| `description` | 2–3문장 요약 |
+| `author` | 저자 |
+| `published_at` | 발행일 (YYYY-MM-DD) |
+| `curator_reason` | Claude가 선택한 이유 |
 
-```python
-articles = _research_round(
-    client=client,
-    round_num=1,
-    topic_name="custom",
-    topic_desc=(
-        "Step-by-step tutorials for building MCP servers that integrate with Claude Code. "
-        "Include code examples and configuration patterns."
-    ),
-    exclude_urls=[],
-    already_found_urls=set(),
-    count=5,
-)
-```
+필드 누락 시 기본값 처리: `agents/news_curation_agent.py` `_tool_find_ai_articles()` 참조.
 
 ---
 
-## 4. 다중 토픽 병렬 수집 (비동기)
+## 4. 다중 토픽 비동기 수집 (청사진)
 
-여러 토픽을 동시에 수집해야 할 때:
+여러 토픽을 동시에 수집해야 할 때는 `asyncio.to_thread(_research_round, ...)`로 각 토픽을 병렬 실행하고,
+결과를 URL 기준으로 dedup해 병합한다.
 
-```python
-import asyncio
-from curator import _research_round, _TOPICS
-from config import ANTHROPIC_API_KEY
-import anthropic
-
-async def fetch_topic(topic_name: str, topic_desc: str, count: int) -> list[dict]:
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    return await asyncio.to_thread(
-        _research_round,
-        client, 1, topic_name, topic_desc, [], set(), count,
-    )
-
-async def find_articles_parallel(topics: list[str], count: int = 3) -> list[dict]:
-    topic_map = {t[0]: t[1] for t in _TOPICS}
-    tasks = [fetch_topic(t, topic_map[t], count) for t in topics if t in topic_map]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    combined = []
-    seen = set()
-    for batch in results:
-        if isinstance(batch, list):
-            for a in batch:
-                if a.get("url") and a["url"] not in seen:
-                    seen.add(a["url"])
-                    combined.append(a)
-    return combined
-```
-
----
-
-## 5. 응답 JSON 구조
-
-`_research_round` 가 반환하는 각 아티클 딕셔너리:
-
-```json
-{
-  "url": "https://...",
-  "title": "10 Claude Code Workflows That Changed How I Write Code",
-  "source": "Simon Willison's Weblog",
-  "description": "2–3 문장 요약",
-  "author": "Simon Willison",
-  "published_at": "2026-03-29",
-  "curator_reason": "Claude Code 훅과 CLAUDE.md 패턴에 대한 구체적 예시 포함"
-}
-```
-
-필드가 없을 경우 기본값 처리:
-
-```python
-articles = [
-    {
-        "url": a.get("url", "").strip(),
-        "title": a.get("title", "제목 없음"),
-        "source": a.get("source", "Unknown"),
-        "description": a.get("description", "")[:500],
-        "published_at": a.get("published_at", ""),
-        "curator_reason": a.get("curator_reason", ""),
-    }
-    for a in raw_articles
-    if a.get("url") and a.get("title")
-]
-```
-
----
-
-## 6. 오류 처리
-
-`_research_round`는 내부적으로 오류를 흡수하고 `[]`를 반환한다.
-호출 측에서 추가 방어가 필요한 경우:
-
-```python
-try:
-    articles = _research_round(...)
-except Exception as e:
-    print(f"[ArticleFinder] 탐색 실패: {e}")
-    articles = []
-
-if not articles:
-    print("[ArticleFinder] 이 토픽에서 아티클을 찾지 못했습니다.")
-```
+에이전트 방식(순차)은 `agents/news_curation_agent.py` `run()` 참조.

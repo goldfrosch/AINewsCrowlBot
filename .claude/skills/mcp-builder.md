@@ -16,47 +16,12 @@ source: https://skills.sh/anthropics/skills/mcp-builder
 
 ## 4단계 개발 프로세스
 
-### 1. 계획
+1. **계획** — 노출할 기능 목록 작성. 도구 이름 컨벤션: `botname_action`
+2. **구현** — FastMCP `@mcp.tool()` 데코레이터로 함수 노출. 이 봇 함수(`curator.curate`, `db.get_stats` 등)를 직접 임포트해 래핑
+3. **도구 설계 원칙** — 동작을 동사로 시작 (`curate_`, `get_`, `update_`), 필요한 필드만 반환, actionable 오류 메시지
+4. **평가** — 10개 실제 시나리오로 검증. READ-ONLY 작업만 테스트에 사용
 
-- 노출할 기능 목록 작성 (예: `curate_news`, `get_stats`, `add_feedback`)
-- 도구 이름 컨벤션: `botname_action` (예: `ainews_curate`, `ainews_stats`)
-
-### 2. 구현 (Python FastMCP 예시)
-
-```python
-from mcp.server.fastmcp import FastMCP
-
-mcp = FastMCP("AINewsCrawlBot")
-
-@mcp.tool()
-def curate_news(count: int = 5) -> list[dict]:
-    """Curate top AI news articles using Claude research."""
-    import curator, database as db
-    articles = curator.curate(target_count=count)
-    return [a.to_dict() for a in articles]
-
-@mcp.tool()
-def get_stats() -> dict:
-    """Get bot statistics and preference data."""
-    import database as db
-    return db.get_stats()
-
-if __name__ == "__main__":
-    mcp.run()
-```
-
-### 3. 도구 설계 원칙
-
-- **명확한 이름**: 동작을 동사로 시작 (`curate_`, `get_`, `update_`)
-- **집중된 반환값**: 필요한 필드만 반환
-- **actionable 오류 메시지**: 다음 단계를 안내
-
-### 4. 평가
-
-- 10개 실제 시나리오로 검증
-- READ-ONLY 작업만 테스트에 사용
-
-## 이 프로젝트에서 MCP 추가 시 노출할 도구 후보
+## 이 프로젝트에서 노출할 도구 후보
 
 | 도구                 | 설명                     |
 | -------------------- | ------------------------ |

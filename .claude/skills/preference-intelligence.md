@@ -1,50 +1,219 @@
 ---
 name: preference-intelligence
-description: 누적된 👍/👎 피드백 데이터를 심층 분석해 큐레이션 품질을 개선하는 패턴. 신뢰도 필터링, 소스/키워드 티어링, 기사 패턴 분석, 큐레이션 힌트 생성까지 포함. preference-analyzer.md의 CRUD를 넘어서는 인사이트 추출 레이어.
+description: 누적된 👍/👎 피드백 데이터를 심층 분석해 큐레이션 품질을 개선하는 패턴. 최근 7일 데이터 최우선, 부족 시 14일→30일→전체로 점진 확장. 신뢰도 필터링, 소스/키워드 티어링, 큐레이션 힌트 생성까지 포함. preference-analyzer.md의 CRUD를 넘어서는 인사이트 추출 레이어.
 ---
 
 # Preference Intelligence — 선호도 심층 분석 패턴
 
 `preference-analyzer.md`가 DB 읽기/쓰기를 담당한다면,
-이 스킬은 누적 데이터에서 **패턴을 추출**하고 **큐레이션 힌트**로 변환하는 방법을 다룬다.
+이 스킬은 **최근 데이터를 우선**해 패턴을 추출하고 **큐레이션 힌트**로 변환하는 방법을 다룬다.
+
+## 데이터 소스 구분
+
+| 테이블                | 타임스탬프                        | 용도                           |
+| --------------------- | --------------------------------- | ------------------------------ |
+| `articles`            | `posted_at` (기사별)              | **시간 윈도우 분석의 주 소스** |
+| `source_preferences`  | `last_updated` (마지막 변경 시각) | 전체 누적 배율 참조용          |
+| `keyword_preferences` | `last_updated` (마지막 변경 시각) | 전체 누적 배율 참조용          |
+
+> `source_preferences`·`keyword_preferences`는 이벤트별 타임스탬프가 없어 시간 윈도우 필터링 불가.
+> 시간 기반 분석은 반드시 `articles` 테이블을 직접 집계한다.
 
 ---
 
-## 1. 신뢰도 필터링
-
-피드백이 너무 적은 소스/키워드는 배율이 왜곡될 수 있다.
-최소 피드백 임계값을 넘은 항목만 인사이트에 반영한다.
+## 1. 시간 윈도우 기반 데이터 조회
 
 ```python
-MIN_FEEDBACK = 3  # 이 이상의 피드백이 있어야 신뢰 가능
+import json
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path("data/bot.db")
+
+# 점진 확장 순서: 7일 → 14일 → 30일 → 전체(None)
+WINDOWS: list[int | None] = [7, 14, 30, None]
+MIN_ARTICLES_WITH_FEEDBACK = 3  # 윈도우를 '충분'하다고 볼 최소 기사 수
+
+
+def get_windowed_feedback(days: int | None) -> dict:
+    """
+    지정 기간 내 게시 기사의 소스·키워드별 likes/dislikes를 집계한다.
+
+    Args:
+        days: 몇 일 전까지 볼지. None이면 전체 기간.
+
+    반환:
+      {
+        "days": int | None,           # 사용된 윈도우 크기
+        "total_articles_with_feedback": int,
+        "by_source": [
+            {"source": str, "likes": int, "dislikes": int, "ratio": float}, ...
+        ],
+        "by_keyword": [
+            {"keyword": str, "likes": int, "dislikes": int}, ...
+        ],
+        "most_liked_titles":    [str, ...],
+        "most_disliked_titles": [str, ...],
+      }
+    """
+    time_filter = ""
+    if days is not None:
+        time_filter = f"AND posted_at >= datetime('now', '-{days} days')"
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+
+        # 피드백 있는 기사 수
+        total = conn.execute(f"""
+            SELECT COUNT(*) FROM articles
+            WHERE status = 'posted'
+              AND (likes > 0 OR dislikes > 0)
+              {time_filter}
+        """).fetchone()[0]
+
+        # 소스별 집계
+        by_source = conn.execute(f"""
+            SELECT source,
+                   SUM(likes)    AS likes,
+                   SUM(dislikes) AS dislikes,
+                   CAST(SUM(likes) AS REAL) /
+                       MAX(SUM(likes) + SUM(dislikes), 1) AS ratio
+            FROM articles
+            WHERE status = 'posted'
+              AND (likes > 0 OR dislikes > 0)
+              {time_filter}
+            GROUP BY source
+            ORDER BY ratio DESC
+        """).fetchall()
+
+        # 키워드별 집계 — keywords 컬럼은 JSON 배열 문자열
+        raw_articles = conn.execute(f"""
+            SELECT keywords, likes, dislikes
+            FROM articles
+            WHERE status = 'posted'
+              AND (likes > 0 OR dislikes > 0)
+              {time_filter}
+        """).fetchall()
+
+        liked_titles = conn.execute(f"""
+            SELECT title FROM articles
+            WHERE status = 'posted' AND likes > 0
+              {time_filter}
+            ORDER BY likes DESC LIMIT 10
+        """).fetchall()
+
+        disliked_titles = conn.execute(f"""
+            SELECT title FROM articles
+            WHERE status = 'posted' AND dislikes > 0
+              {time_filter}
+            ORDER BY dislikes DESC LIMIT 10
+        """).fetchall()
+
+    # 키워드 집계 (Python에서 JSON 파싱)
+    kw_map: dict[str, dict] = {}
+    for row in raw_articles:
+        try:
+            keywords = json.loads(row["keywords"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            keywords = []
+        for kw in keywords:
+            if not kw:
+                continue
+            entry = kw_map.setdefault(kw, {"keyword": kw, "likes": 0, "dislikes": 0})
+            entry["likes"]    += row["likes"]
+            entry["dislikes"] += row["dislikes"]
+
+    by_keyword = sorted(kw_map.values(), key=lambda x: x["likes"], reverse=True)
+
+    return {
+        "days":                       days,
+        "total_articles_with_feedback": total,
+        "by_source":                  [dict(r) for r in by_source],
+        "by_keyword":                 by_keyword,
+        "most_liked_titles":          [r["title"] for r in liked_titles],
+        "most_disliked_titles":       [r["title"] for r in disliked_titles],
+    }
+```
+
+---
+
+## 2. 점진적 윈도우 확장
+
+최근 7일 데이터가 충분하면 그것만 사용하고, 부족하면 자동으로 윈도우를 넓힌다.
+
+```python
+def find_sufficient_window(
+    min_articles: int = MIN_ARTICLES_WITH_FEEDBACK,
+) -> tuple[dict, int | None]:
+    """
+    피드백 기사가 min_articles개 이상인 가장 좁은 윈도우를 찾아 반환한다.
+
+    탐색 순서: 7일 → 14일 → 30일 → 전체
+    모든 윈도우가 부족하면 전체 기간 데이터를 반환한다.
+
+    반환: (windowed_feedback_dict, used_days)
+    """
+    for days in WINDOWS:
+        data = get_windowed_feedback(days)
+        if data["total_articles_with_feedback"] >= min_articles:
+            label = f"{days}일" if days else "전체 기간"
+            print(f"[PreferenceIntelligence] 윈도우: {label} "
+                  f"(피드백 기사 {data['total_articles_with_feedback']}개)")
+            return data, days
+
+    # 이 줄에는 도달하지 않지만 타입 안전성 확보
+    fallback = get_windowed_feedback(None)
+    return fallback, None
+
+
+def describe_window(days: int | None) -> str:
+    """윈도우 크기를 사람이 읽기 쉬운 문자열로 변환."""
+    if days is None:
+        return "전체 기간"
+    return f"최근 {days}일"
+```
+
+---
+
+## 3. 신뢰도 필터링
+
+피드백이 너무 적은 소스/키워드는 배율이 왜곡될 수 있다.
+
+```python
+MIN_FEEDBACK = 3
 
 def filter_reliable(items: list[dict], min_feedback: int = MIN_FEEDBACK) -> list[dict]:
-    """total_likes + total_dislikes >= min_feedback인 항목만 반환."""
+    """likes + dislikes >= min_feedback인 항목만 반환."""
     return [
         item for item in items
-        if item["total_likes"] + item["total_dislikes"] >= min_feedback
+        if item["likes"] + item["dislikes"] >= min_feedback
     ]
 ```
 
 ---
 
-## 2. 소스/키워드 티어 분류
+## 4. 소스/키워드 티어 분류
 
-배율 기준으로 5단계로 분류해 큐레이터에게 명확한 신호를 전달한다.
+윈도우 집계 데이터에서 likes/dislikes 비율로 5단계 티어를 결정한다.
 
 ```python
-def tier(multiplier: float) -> str:
-    if multiplier >= 1.5:  return "강선호"
-    if multiplier >= 1.1:  return "선호"
-    if multiplier >= 0.9:  return "중립"
-    if multiplier >= 0.5:  return "비선호"
+def _ratio_to_tier(likes: int, dislikes: int) -> str:
+    total = likes + dislikes
+    if total == 0:
+        return "중립"
+    ratio = likes / total
+    if ratio >= 0.8:   return "강선호"
+    if ratio >= 0.6:   return "선호"
+    if ratio >= 0.4:   return "중립"
+    if ratio >= 0.2:   return "비선호"
     return "강비선호"
 
-def build_tiered_profile(prefs: dict, min_feedback: int = MIN_FEEDBACK) -> dict:
-    """
-    source_preferences / keyword_preferences를 티어별로 분류.
 
-    반환 구조:
+def build_tiered_profile(windowed: dict, min_feedback: int = MIN_FEEDBACK) -> dict:
+    """
+    시간 윈도우 집계 데이터를 티어별로 분류한다.
+
+    반환:
       {
         "sources":  {"강선호": [...], "선호": [...], "중립": [...], "비선호": [...], "강비선호": [...]},
         "keywords": {"강선호": [...], "선호": [...], ...},
@@ -52,16 +221,16 @@ def build_tiered_profile(prefs: dict, min_feedback: int = MIN_FEEDBACK) -> dict:
         "reliable_keyword_count": int,
       }
     """
-    reliable_sources  = filter_reliable(prefs["sources"],  min_feedback)
-    reliable_keywords = filter_reliable(prefs["keywords"], min_feedback)
+    reliable_sources  = filter_reliable(windowed["by_source"],  min_feedback)
+    reliable_keywords = filter_reliable(windowed["by_keyword"], min_feedback)
 
     src_tiers = {"강선호": [], "선호": [], "중립": [], "비선호": [], "강비선호": []}
     kw_tiers  = {"강선호": [], "선호": [], "중립": [], "비선호": [], "강비선호": []}
 
     for s in reliable_sources:
-        src_tiers[tier(s["multiplier"])].append(s["source"])
+        src_tiers[_ratio_to_tier(s["likes"], s["dislikes"])].append(s["source"])
     for k in reliable_keywords:
-        kw_tiers[tier(k["multiplier"])].append(k["keyword"])
+        kw_tiers[_ratio_to_tier(k["likes"], k["dislikes"])].append(k["keyword"])
 
     return {
         "sources":               src_tiers,
@@ -71,88 +240,32 @@ def build_tiered_profile(prefs: dict, min_feedback: int = MIN_FEEDBACK) -> dict:
     }
 ```
 
----
-
-## 3. articles 테이블 기반 패턴 분석
-
-`source_preferences`·`keyword_preferences`만 보는 대신,
-실제 게시된 기사의 반응을 직접 집계하면 더 풍부한 패턴을 얻는다.
-
-```python
-import sqlite3
-from pathlib import Path
-
-DB_PATH = Path("data/bot.db")
-
-def get_article_feedback_patterns(top_n: int = 10) -> dict:
-    """
-    게시된 기사의 likes/dislikes를 소스별로 집계.
-
-    반환:
-      {
-        "by_source": [{"source": str, "likes": int, "dislikes": int, "ratio": float}, ...],
-        "most_liked_titles":    [str, ...],  # 상위 N개
-        "most_disliked_titles": [str, ...],  # 상위 N개
-      }
-    """
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-
-        by_source = conn.execute("""
-            SELECT source,
-                   SUM(likes)    AS likes,
-                   SUM(dislikes) AS dislikes,
-                   CAST(SUM(likes) AS REAL) /
-                       MAX(SUM(likes) + SUM(dislikes), 1) AS ratio
-            FROM articles
-            WHERE status = 'posted'
-            GROUP BY source
-            HAVING SUM(likes) + SUM(dislikes) > 0
-            ORDER BY ratio DESC
-        """).fetchall()
-
-        liked_titles = conn.execute("""
-            SELECT title FROM articles
-            WHERE status = 'posted' AND likes > 0
-            ORDER BY likes DESC LIMIT ?
-        """, (top_n,)).fetchall()
-
-        disliked_titles = conn.execute("""
-            SELECT title FROM articles
-            WHERE status = 'posted' AND dislikes > 0
-            ORDER BY dislikes DESC LIMIT ?
-        """, (top_n,)).fetchall()
-
-    return {
-        "by_source":             [dict(r) for r in by_source],
-        "most_liked_titles":     [r["title"] for r in liked_titles],
-        "most_disliked_titles":  [r["title"] for r in disliked_titles],
-    }
-```
+> **참고:** 전체 누적 배율(`source_preferences.multiplier`)을 함께 참조하고 싶다면
+> `db.get_all_preferences()`를 별도 호출해 보조 가중치로 활용한다.
+> 단, 최근 윈도우 데이터와 충돌 시 **최근 윈도우를 우선**한다.
 
 ---
 
-## 4. 큐레이션 힌트 딕셔너리 생성
-
-분석 결과를 큐레이터/에이전트가 바로 쓸 수 있는 힌트 구조로 변환한다.
+## 5. 큐레이션 힌트 딕셔너리 생성
 
 ```python
 def build_curation_hints(
     tiered: dict,
-    patterns: dict,
+    windowed: dict,
     total_feedback: int,
 ) -> dict:
     """
-    티어 프로파일 + 기사 패턴 → 큐레이션 힌트 딕셔너리.
+    티어 프로파일 + 시간 윈도우 집계 → 큐레이션 힌트 딕셔너리.
 
     반환:
       {
-        "boost_sources":  list[str],   # 우선 탐색할 소스
-        "avoid_sources":  list[str],   # 수집 제외할 소스
-        "focus_keywords": list[str],   # 웹 검색 쿼리에 포함할 키워드
-        "skip_keywords":  list[str],   # 검색 쿼리에서 제외할 키워드
-        "cold_start":     bool,        # 피드백 부족 → 다양성 우선 모드
-        "confidence":     str,         # "low" | "medium" | "high"
+        "boost_sources":  list[str],
+        "avoid_sources":  list[str],
+        "focus_keywords": list[str],
+        "skip_keywords":  list[str],
+        "cold_start":     bool,
+        "confidence":     str,   # "low" | "medium" | "high"
+        "data_window":    str,   # "최근 7일" | "최근 14일" | ... | "전체 기간"
       }
     """
     cold_start = total_feedback < 10
@@ -164,20 +277,8 @@ def build_curation_hints(
     else:
         confidence = "high"
 
-    boost_sources = (
-        tiered["sources"]["강선호"] + tiered["sources"]["선호"]
-    )[:5]
-
-    avoid_sources = (
-        tiered["sources"]["강비선호"] + tiered["sources"]["비선호"]
-    )[:5]
-
-    # articles 테이블 패턴으로 boost/avoid 보완
-    for row in patterns["by_source"]:
-        if row["ratio"] >= 0.8 and row["source"] not in boost_sources:
-            boost_sources.append(row["source"])
-        elif row["ratio"] <= 0.2 and row["source"] not in avoid_sources:
-            avoid_sources.append(row["source"])
+    boost_sources = (tiered["sources"]["강선호"] + tiered["sources"]["선호"])[:5]
+    avoid_sources = (tiered["sources"]["강비선호"] + tiered["sources"]["비선호"])[:5]
 
     return {
         "boost_sources":  boost_sources,
@@ -186,59 +287,65 @@ def build_curation_hints(
         "skip_keywords":  tiered["keywords"]["강비선호"][:10],
         "cold_start":     cold_start,
         "confidence":     confidence,
+        "data_window":    describe_window(windowed["days"]),
     }
 ```
 
 ---
 
-## 5. 전체 분석 파이프라인
+## 6. 전체 분석 파이프라인
 
 ```python
 import database as db
 
-def run_preference_analysis(min_feedback: int = MIN_FEEDBACK) -> dict:
+def run_preference_analysis(
+    min_articles: int = MIN_ARTICLES_WITH_FEEDBACK,
+    min_feedback: int = MIN_FEEDBACK,
+) -> dict:
     """
-    선호도 전체 분석을 실행하고 큐레이션 힌트를 포함한 리포트를 반환.
+    선호도 전체 분석 실행. 최근 7일 우선, 부족 시 자동 확장.
 
     반환:
       {
-        "tiered_profile": dict,     # 티어별 소스/키워드
-        "article_patterns": dict,   # 기사 테이블 집계
-        "curation_hints": dict,     # 바로 사용 가능한 힌트
-        "total_feedback": int,
-        "summary": str,
+        "windowed":        dict,   # 시간 윈도우 집계 원본
+        "tiered_profile":  dict,   # 티어별 소스/키워드
+        "curation_hints":  dict,   # 바로 사용 가능한 힌트
+        "total_feedback":  int,
+        "data_window":     str,    # 실제로 사용된 윈도우 레이블
+        "summary":         str,
       }
     """
-    prefs = db.get_all_preferences()
-    total_feedback = sum(
-        s["total_likes"] + s["total_dislikes"] for s in prefs["sources"]
-    )
+    windowed, used_days = find_sufficient_window(min_articles)
+    total_feedback = windowed["total_articles_with_feedback"]
 
-    tiered   = build_tiered_profile(prefs, min_feedback)
-    patterns = get_article_feedback_patterns()
-    hints    = build_curation_hints(tiered, patterns, total_feedback)
+    # 전체 누적 피드백 수는 source_preferences 집계로 보완
+    agg_prefs = db.get_all_preferences()
+    total_agg = sum(s["total_likes"] + s["total_dislikes"] for s in agg_prefs["sources"])
 
+    tiered = build_tiered_profile(windowed, min_feedback)
+    hints  = build_curation_hints(tiered, windowed, total_agg)
+
+    data_window = describe_window(used_days)
     summary = (
-        f"피드백 {total_feedback}건 | "
-        f"신뢰 소스 {tiered['reliable_source_count']}개 / "
-        f"신뢰 키워드 {tiered['reliable_keyword_count']}개 | "
+        f"데이터 윈도우: {data_window} | "
+        f"피드백 기사 {total_feedback}개 | "
+        f"누적 피드백 {total_agg}건 | "
         f"신뢰도: {hints['confidence']}"
     )
 
     return {
-        "tiered_profile":  tiered,
-        "article_patterns": patterns,
-        "curation_hints":  hints,
-        "total_feedback":  total_feedback,
-        "summary":         summary,
+        "windowed":       windowed,
+        "tiered_profile": tiered,
+        "curation_hints": hints,
+        "total_feedback": total_agg,
+        "data_window":    data_window,
+        "summary":        summary,
     }
 ```
 
 ---
 
-## 6. Claude에 선호도 인사이트 요청
-
-누적 데이터가 충분할 때 Claude에게 자연어 인사이트를 생성하게 할 수 있다.
+## 7. Claude에 선호도 인사이트 요청
 
 ```python
 import json
@@ -256,18 +363,22 @@ def generate_preference_insights(analysis: dict) -> str:
         return "피드백 데이터가 아직 부족합니다. 10건 이상 쌓인 후 인사이트를 생성하세요."
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    windowed = analysis["windowed"]
 
-    prompt = f"""다음은 Discord AI 뉴스 봇의 누적 피드백 분석 결과입니다.
+    prompt = f"""다음은 Discord AI 뉴스 봇의 피드백 분석 결과입니다.
+분석 기간: {analysis['data_window']} (피드백 기사 {windowed['total_articles_with_feedback']}개)
 
-## 티어 프로파일
-{json.dumps(analysis["tiered_profile"], ensure_ascii=False, indent=2)}
+## 소스별 반응
+{json.dumps(windowed["by_source"][:10], ensure_ascii=False, indent=2)}
 
-## 기사별 반응 패턴
-- 가장 많이 좋아요 받은 기사 제목:
-{chr(10).join(f'  - {t}' for t in analysis["article_patterns"]["most_liked_titles"][:5])}
+## 키워드별 반응 (상위 10개)
+{json.dumps(windowed["by_keyword"][:10], ensure_ascii=False, indent=2)}
 
-- 가장 많이 싫어요 받은 기사 제목:
-{chr(10).join(f'  - {t}' for t in analysis["article_patterns"]["most_disliked_titles"][:5])}
+## 좋아요 많은 기사 제목
+{chr(10).join(f'  - {t}' for t in windowed["most_liked_titles"][:5])}
+
+## 싫어요 많은 기사 제목
+{chr(10).join(f'  - {t}' for t in windowed["most_disliked_titles"][:5])}
 
 ## 현재 큐레이션 힌트
 {json.dumps(analysis["curation_hints"], ensure_ascii=False, indent=2)}
@@ -287,15 +398,15 @@ def generate_preference_insights(analysis: dict) -> str:
 
 ---
 
-## 7. 큐레이터/에이전트 통합
+## 8. 큐레이터/에이전트 통합
 
 `build_curation_hints()` 결과를 `news_curation_agent.py`의 `_tool_review_articles`에 주입:
 
 ```python
+analysis = run_preference_analysis()
 hints = analysis["curation_hints"]
 
-# find_ai_articles 호출 시 boost_sources를 검색 쿼리에 반영
-topic_query = f"{topic_desc} site:{' OR site:'.join(hints['boost_sources'][:2])}"
+print(f"[선호도] {analysis['summary']}")
 
 # review_articles의 preferences 인자로 전달
 preferences = {

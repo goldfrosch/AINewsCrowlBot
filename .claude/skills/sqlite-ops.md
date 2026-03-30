@@ -10,7 +10,6 @@ description: SQLite database patterns for this project. Use when modifying datab
 ## 스키마 요약
 
 ```sql
--- 수집된 기사
 articles (
     id, url UNIQUE, title, source, description, author,
     image_url, published_at, platform_score, final_score,
@@ -21,59 +20,23 @@ articles (
     crawled_at
 )
 
--- 소스별 선호도
 source_preferences (source PK, multiplier, total_likes, total_dislikes, last_updated)
 
--- 키워드별 선호도
 keyword_preferences (keyword PK, multiplier, total_likes, total_dislikes, last_updated)
 ```
 
-## 컨텍스트 매니저 패턴
+## 컨텍스트 매니저
 
-모든 DB 접근은 `_db()` 컨텍스트 매니저를 통해 자동 commit/rollback:
-```python
-@contextmanager
-def _db():
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row   # dict-like 접근
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-```
+모든 DB 접근은 `_db()` 컨텍스트 매니저를 통해 자동 commit/rollback. `database.py` 참조.
 
 ## 중복 방지 Upsert
 
-```python
-def upsert_article(article: dict) -> bool:
-    try:
-        with _db() as conn:
-            conn.execute("INSERT INTO articles (...) VALUES (...)", article)
-        return True
-    except sqlite3.IntegrityError:
-        return False   # URL UNIQUE 제약 위반 → 중복
-```
+`upsert_article(article)` — URL UNIQUE 제약 위반 시 `False` 반환, 성공 시 `True`.
 
-## 선호도 UPDATE — UPSERT 패턴
+## 선호도 UPDATE — UPSERT + 클램핑 패턴
 
-```python
-conn.execute("""
-    INSERT INTO source_preferences (source, multiplier, total_likes, total_dislikes)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(source) DO UPDATE SET
-        multiplier     = MAX(0.1, MIN(5.0, multiplier + ?)),
-        total_likes    = total_likes + ?,
-        total_dislikes = total_dislikes + ?,
-        last_updated   = datetime('now')
-""", (...))
-```
-
-범위 클램핑: `MAX(PREFERENCE_MIN, MIN(PREFERENCE_MAX, value))`
+`ON CONFLICT(source) DO UPDATE`로 upsert하고 `MAX(0.1, MIN(5.0, multiplier + delta))`로 범위 클램핑.
+구현: `database.py` `update_source_preference()`, `update_keyword_preference()` 참조.
 
 ## 주요 조회 함수
 
@@ -87,21 +50,16 @@ conn.execute("""
 
 ## 점수 업데이트 순서
 
-```
-1. curator.curate() → Article 리스트 반환
-2. upsert_article()  → DB에 저장 (platform_score=100)
-3. rank_articles()   → final_score 계산
-4. update_final_scores() → DB에 final_score 반영
-5. Discord 게시 후 mark_as_posted()
-6. 👍/👎 → apply_feedback() → update_source/keyword_preference()
-```
+1. `curator.curate()` → 기사 리스트 반환
+2. `upsert_article()` → DB 저장 (`platform_score=100`)
+3. `rank_articles()` → `final_score` 계산
+4. `update_final_scores()` → DB에 반영
+5. Discord 게시 후 `mark_as_posted()`
+6. 👍/👎 → `ranker.apply_feedback()` → `update_source/keyword_preference()`
 
 ## DB 경로
 
-```python
-DB_PATH = Path("data/bot.db")   # .gitignore에 포함됨
-```
-`data/` 디렉토리가 없으면 자동 생성 (`DB_PATH.parent.mkdir(exist_ok=True)`).
+`DB_PATH = Path("data/bot.db")` — `.gitignore`에 포함됨. `data/` 없으면 자동 생성.
 
 ## 스키마 변경 시
 

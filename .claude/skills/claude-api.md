@@ -9,8 +9,8 @@ source: https://skills.sh/anthropics/skills/claude-api
 ## 기본 원칙
 
 - **기본 모델**: `claude-opus-4-6` (명시적 지시 없으면 항상 이 모델 사용)
-- **Thinking**: `thinking: {"type": "adaptive"}` (복잡한 추론 작업에 적용)
-- **Streaming**: 긴 입출력에는 반드시 스트리밍 사용 (타임아웃 방지)
+- **Thinking**: `thinking={"type": "adaptive"}` — `"enabled"` 방식은 더 이상 사용하지 않음
+- **Streaming**: 긴 입출력에는 반드시 `client.messages.stream()` 사용 (타임아웃 방지)
 
 ## 언제 어떤 방식을 쓸까
 
@@ -21,78 +21,26 @@ source: https://skills.sh/anthropics/skills/claude-api
 | 파일/웹/셸 접근이 필요한 에이전트 | Agent SDK                  |
 | 커스텀 도구로 최대 유연성         | API + agentic loop         |
 
-## 핵심 패턴
+## Tool Use — web_search 도구 형식
 
-### 단순 호출
-
-```python
-import anthropic
-
-client = anthropic.Anthropic()  # ANTHROPIC_API_KEY 환경변수 자동 읽기
-
-response = client.messages.create(
-    model="claude-opus-4-6",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "Hello"}],
-)
-print(response.content[0].text)
-```
-
-### 스트리밍 (긴 응답 필수)
+`web_search_20260209`는 tools 리스트에 아래 형식으로 지정한다 (이름 오탈자 주의):
 
 ```python
-with client.messages.stream(
-    model="claude-opus-4-6",
-    max_tokens=8000,
-    messages=[{"role": "user", "content": prompt}],
-) as stream:
-    response = stream.get_final_message()
+tools=[{"type": "web_search_20260209", "name": "web_search"}]
 ```
 
-### Tool Use (web_search 포함)
+이 프로젝트에서 사용 위치: `curator.py` `_research_round()` 참조.
 
-```python
-with client.messages.stream(
-    model="claude-opus-4-6",
-    max_tokens=4000,
-    tools=[{"type": "web_search_20260209", "name": "web_search"}],
-    system=system_prompt,
-    messages=[{"role": "user", "content": user_prompt}],
-) as stream:
-    response = stream.get_final_message()
+## 에러 처리 — 주요 예외 클래스
 
-# 응답에서 text block 추출
-for block in response.content:
-    if block.type == "text":
-        print(block.text)
-```
+| 예외 | 원인 | 처리 |
+|------|------|------|
+| `anthropic.AuthenticationError` | API 키 무효 | 즉시 중단 |
+| `anthropic.RateLimitError` | 요청 한도 초과 | `time.sleep(30)` 후 재시도 |
+| `anthropic.APIStatusError` | 서버 오류 (529 = 과부하) | 라운드 건너뜀 |
+| `anthropic.APIError` | 기타 API 오류 | 로그 후 중단 |
 
-### Adaptive Thinking
-
-```python
-# ✅ 올바른 방식 (2026 이후)
-thinking={"type": "adaptive"}
-
-# ❌ 더 이상 사용하지 않음
-# thinking={"type": "enabled", "budget_tokens": 5000}
-```
-
-## 에러 처리
-
-```python
-try:
-    response = client.messages.create(...)
-except anthropic.AuthenticationError:
-    raise RuntimeError("API 키가 유효하지 않습니다.")
-except anthropic.RateLimitError:
-    time.sleep(30)  # 재시도 전 대기
-    # 재시도 로직
-except anthropic.APIStatusError as e:
-    # e.status_code: 529 = 서버 과부하
-    print(f"API 오류 ({e.status_code}): {e.message}")
-except anthropic.APIError as e:
-    raise RuntimeError(f"API 오류: {e}")
-```
+이 프로젝트에서의 에러 처리 패턴: `curator.py` `_research_round()` 참조.
 
 ## 모델 가격표 (2026-02-17)
 
@@ -104,6 +52,6 @@ except anthropic.APIError as e:
 
 ## 이 프로젝트에서의 사용 위치
 
-- `curator.py` — `curate()` 함수: `web_search_20260209` 도구로 AI 뉴스 리서치
-  - 라운드당 `max_tokens=4000` (새벽 rate limit 대비)
-  - 최종 선별 시 `max_tokens=8000` (web_search 없는 판단 전용 호출)
+- `curator.py` — `_research_round()`: `web_search_20260209` 도구로 AI 뉴스 리서치, 라운드당 `max_tokens=4000`
+- `curator.py` — `_select_best()`: web_search 없는 판단 전용 호출, `max_tokens=8000`
+- `agents/news_curation_agent.py` — `run()`: tool-use 기반 agentic loop
