@@ -55,5 +55,6 @@ python main.py
 | [`.claude/skills/sqlite-ops.md`](.claude/skills/sqlite-ops.md)                   | `database.py` 스키마·쿼리·선호도 업데이트  |
 | [`.claude/skills/mcp-builder.md`](.claude/skills/mcp-builder.md)                 | MCP 인터페이스 추가 시                     |
 | [`.claude/skills/preference-analyzer.md`](.claude/skills/preference-analyzer.md) | DB 선호도 읽기·쓰기·프롬프트 주입 패턴     |
+| [`.claude/skills/preference-intelligence.md`](.claude/skills/preference-intelligence.md) | 선호도 심층 분석·티어링·큐레이션 힌트 생성 |
 | [`.claude/skills/article-finder.md`](.claude/skills/article-finder.md)           | 웹 검색 기반 AI 기사 탐색 패턴             |
 | [`.claude/skills/article-reviewer.md`](.claude/skills/article-reviewer.md)       | 기사 품질 검토·필터링·랭킹 파이프라인      |
