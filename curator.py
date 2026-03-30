@@ -203,6 +203,7 @@ def _research_round(
     ]
 
     try:
+        _t0 = time.perf_counter()
         with client.messages.stream(
             model=CLAUDE_MODEL,
             max_tokens=4000,
@@ -215,12 +216,14 @@ def _research_round(
             response.usage.input_tokens,
             response.usage.output_tokens,
             caller=f"curator_research_r{round_num}_{topic_name}",
+            elapsed_seconds=round(time.perf_counter() - _t0, 2),
         )
 
     except anthropic.RateLimitError:
         print(f"[Curator] R{round_num} ({topic_name}): RateLimit — 30초 대기 후 재시도")
         time.sleep(30)
         try:
+            _t0 = time.perf_counter()
             with client.messages.stream(
                 model=CLAUDE_MODEL,
                 max_tokens=4000,
@@ -233,6 +236,7 @@ def _research_round(
                 response.usage.input_tokens,
                 response.usage.output_tokens,
                 caller=f"curator_research_r{round_num}_{topic_name}_retry",
+                elapsed_seconds=round(time.perf_counter() - _t0, 2),
             )
         except Exception as e:
             print(f"[Curator] R{round_num} ({topic_name}): 재시도 실패 → 건너뜀 ({e})")
@@ -306,6 +310,7 @@ Output ONLY a JSON array of exactly {target_count} items selected from the candi
 Preserve all original fields. Add or improve `curator_reason` if missing or weak."""
 
     try:
+        _t0 = time.perf_counter()
         response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=8000,
@@ -316,6 +321,7 @@ Preserve all original fields. Add or improve `curator_reason` if missing or weak
             response.usage.input_tokens,
             response.usage.output_tokens,
             caller="curator_select",
+            elapsed_seconds=round(time.perf_counter() - _t0, 2),
         )
         for block in response.content:
             if block.type == "text":
@@ -367,6 +373,7 @@ def _single_research(
     ]
 
     try:
+        _t0 = time.perf_counter()
         with client.messages.stream(
             model=CLAUDE_MODEL,
             max_tokens=4000,
@@ -380,6 +387,7 @@ def _single_research(
             response.usage.input_tokens,
             response.usage.output_tokens,
             caller="curator_single",
+            elapsed_seconds=round(time.perf_counter() - _t0, 2),
         )
 
         for block in response.content:

@@ -33,20 +33,27 @@ def init_token_db() -> None:
     with _db() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS token_usage (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                called_at     TEXT NOT NULL DEFAULT (datetime('now')),
-                caller        TEXT NOT NULL DEFAULT 'unknown',
-                input_tokens  INTEGER NOT NULL DEFAULT 0,
-                output_tokens INTEGER NOT NULL DEFAULT 0,
-                total_tokens  INTEGER NOT NULL DEFAULT 0
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                called_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+                caller          TEXT    NOT NULL DEFAULT 'unknown',
+                input_tokens    INTEGER NOT NULL DEFAULT 0,
+                output_tokens   INTEGER NOT NULL DEFAULT 0,
+                total_tokens    INTEGER NOT NULL DEFAULT 0,
+                elapsed_seconds REAL    DEFAULT NULL
             );
         """)
+        # 기존 DB에 컬럼이 없으면 추가
+        # TODO: 마이그레이션 코드라 한번 사용되었으면 이제 없애도 됨.
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(token_usage)")}
+        if "elapsed_seconds" not in existing:
+            conn.execute("ALTER TABLE token_usage ADD COLUMN elapsed_seconds REAL DEFAULT NULL")
 
 
 def log_token_usage(
     input_tokens: int,
     output_tokens: int,
     caller: str = "unknown",
+    elapsed_seconds: float | None = None,
 ) -> None:
     """API 호출 토큰 사용량을 DB에 기록한다."""
     init_token_db()
@@ -54,10 +61,10 @@ def log_token_usage(
     with _db() as conn:
         conn.execute(
             """
-            INSERT INTO token_usage (caller, input_tokens, output_tokens, total_tokens)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO token_usage (caller, input_tokens, output_tokens, total_tokens, elapsed_seconds)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (caller, input_tokens, output_tokens, total),
+            (caller, input_tokens, output_tokens, total, elapsed_seconds),
         )
 
 

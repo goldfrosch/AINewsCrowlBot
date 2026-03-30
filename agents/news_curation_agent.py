@@ -198,6 +198,7 @@ Output ONLY a JSON array of the kept articles (preserve all fields, improve cura
 [{{"url":"...","title":"...","source":"...","description":"...","published_at":"...","curator_reason":"..."}}]"""
 
     try:
+        _t0 = time.perf_counter()
         response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=6000,
@@ -208,6 +209,7 @@ Output ONLY a JSON array of the kept articles (preserve all fields, improve cura
             response.usage.input_tokens,
             response.usage.output_tokens,
             caller="agent_review",
+            elapsed_seconds=round(time.perf_counter() - _t0, 2),
         )
         for block in response.content:
             if block.type == "text":
@@ -346,6 +348,7 @@ def run(target_count: int = 5, topics: list[str] | None = None) -> list[dict]:
     loop_step = 0
     while True:
         loop_step += 1
+        _t0 = time.perf_counter()
         response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=4000,
@@ -357,6 +360,7 @@ def run(target_count: int = 5, topics: list[str] | None = None) -> list[dict]:
             response.usage.input_tokens,
             response.usage.output_tokens,
             caller=f"agent_loop_step{loop_step}",
+            elapsed_seconds=round(time.perf_counter() - _t0, 2),
         )
 
         messages.append({"role": "assistant", "content": response.content})
