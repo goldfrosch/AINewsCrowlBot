@@ -4,13 +4,22 @@
 새벽 2시에 실행되어 data/preference_profile.json 을 생성한다.
 news_curation_agent.run() 이 이 파일을 읽어 큐레이션 힌트로 활용한다.
 
-preference-intelligence.md 스킬 패턴을 구현한 것.
+파이프라인: run_preference_analysis() → save_preference_profile()
+통합:      load_preference_profile() → news_curation_agent.run(external_preferences=profile)
+
+데이터 소스 제약:
+  - 시간 윈도우 분석은 articles.posted_at 기준으로만 가능.
+  - source_preferences / keyword_preferences 는 이벤트별 타임스탬프가 없어
+    윈도우 필터 불가 → 전체 누적 배율 참조 용도로만 사용.
 """
 import json
 import sqlite3
 import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import sys
+
+KST = ZoneInfo("Asia/Seoul")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -31,7 +40,7 @@ def get_windowed_feedback(days: int | None) -> dict:
     """지정 기간 내 게시 기사의 소스·키워드별 likes/dislikes를 집계한다."""
     time_filter = ""
     if days is not None:
-        time_filter = f"AND posted_at >= datetime('now', '-{days} days')"
+        time_filter = f"AND posted_at >= datetime('now', '+9 hours', '-{days} days')"
 
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -138,6 +147,7 @@ def filter_reliable(items: list[dict], min_feedback: int = MIN_FEEDBACK) -> list
 
 
 def _ratio_to_tier(likes: int, dislikes: int) -> str:
+    # likes/(likes+dislikes) 기준 5단계: 강선호 ≥0.8 / 선호 ≥0.6 / 중립 ≥0.4 / 비선호 ≥0.2 / 강비선호
     total = likes + dislikes
     if total == 0:
         return "중립"
@@ -176,8 +186,10 @@ def build_curation_hints(
     windowed: dict,
     total_feedback: int,
 ) -> dict:
+    # cold_start=True 이면 에이전트가 힌트를 무시하고 다양성 위주로 동작
     cold_start = total_feedback < 10
 
+    # 누적 피드백 수 기준 신뢰도: <10 → low / <30 → medium / 30+ → high
     if total_feedback < 10:
         confidence = "low"
     elif total_feedback < 30:
@@ -249,7 +261,7 @@ def run_preference_analysis(
 def save_preference_profile(analysis: dict) -> dict:
     """분석 결과를 data/preference_profile.json 에 저장하고 프로파일 dict를 반환한다."""
     profile = {
-        "generated_at":   datetime.datetime.now().isoformat(),
+        "generated_at":   datetime.datetime.now(tz=KST).isoformat(),
         "curation_hints": analysis["curation_hints"],
         "tiered_profile": analysis["tiered_profile"],
         "total_feedback": analysis["total_feedback"],

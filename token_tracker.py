@@ -34,7 +34,7 @@ def init_token_db() -> None:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS token_usage (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                called_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+                called_at       TEXT    NOT NULL DEFAULT (datetime('now', '+9 hours')),
                 caller          TEXT    NOT NULL DEFAULT 'unknown',
                 input_tokens    INTEGER NOT NULL DEFAULT 0,
                 output_tokens   INTEGER NOT NULL DEFAULT 0,
@@ -80,7 +80,7 @@ def get_today_token_stats() -> dict:
                 COALESCE(SUM(total_tokens),  0)  AS total_tokens,
                 COALESCE(AVG(total_tokens),  0)  AS avg_per_call
             FROM token_usage
-            WHERE date(called_at, 'localtime') = date('now', 'localtime')
+            WHERE date(called_at) = date('now', '+9 hours')
             """
         ).fetchone()
 
@@ -91,7 +91,7 @@ def get_today_token_stats() -> dict:
                 COUNT(*)          AS calls,
                 SUM(total_tokens) AS tokens
             FROM token_usage
-            WHERE date(called_at, 'localtime') = date('now', 'localtime')
+            WHERE date(called_at) = date('now', '+9 hours')
             GROUP BY caller
             ORDER BY tokens DESC
             """
@@ -113,12 +113,12 @@ def get_average_daily_stats() -> dict:
         row = conn.execute(
             """
             SELECT
-                COUNT(DISTINCT date(called_at, 'localtime'))      AS total_days,
+                COUNT(DISTINCT date(called_at))      AS total_days,
                 COALESCE(SUM(total_tokens), 0)                    AS grand_total,
                 COALESCE(AVG(total_tokens), 0)                    AS avg_per_call,
                 COALESCE(
                     SUM(total_tokens) * 1.0 /
-                    NULLIF(COUNT(DISTINCT date(called_at, 'localtime')), 0),
+                    NULLIF(COUNT(DISTINCT date(called_at)), 0),
                     0
                 )                                                  AS avg_per_day
             FROM token_usage
@@ -129,11 +129,11 @@ def get_average_daily_stats() -> dict:
         daily = conn.execute(
             """
             SELECT
-                date(called_at, 'localtime') AS day,
+                date(called_at) AS day,
                 SUM(total_tokens)            AS tokens,
                 COUNT(*)                     AS calls
             FROM token_usage
-            WHERE called_at >= datetime('now', '-7 days')
+            WHERE called_at >= datetime('now', '+9 hours', '-7 days')
             GROUP BY day
             ORDER BY day DESC
             """
@@ -163,7 +163,7 @@ def get_window_stats() -> dict:
                 COUNT(*)                        AS calls,
                 COALESCE(SUM(total_tokens), 0)  AS tokens
             FROM token_usage
-            WHERE called_at >= datetime('now', '-5 hours')
+            WHERE called_at >= datetime('now', '+9 hours', '-5 hours')
             """
         ).fetchone()
 
@@ -173,8 +173,8 @@ def get_window_stats() -> dict:
                 COUNT(*)                        AS calls,
                 COALESCE(SUM(total_tokens), 0)  AS tokens
             FROM token_usage
-            WHERE called_at >= datetime('now', '-10 hours')
-              AND called_at <  datetime('now', '-5 hours')
+            WHERE called_at >= datetime('now', '+9 hours', '-10 hours')
+              AND called_at <  datetime('now', '+9 hours', '-5 hours')
             """
         ).fetchone()
 

@@ -89,6 +89,7 @@ RALPH_LOOP_ENABLED = False
 
 # ─── 시스템 프롬프트 ──────────────────────────────────────────────────────────
 
+# Ralph Loop용: 개발자 워크플로우 중심
 _SYSTEM_RESEARCH = """\
 You are a focused researcher finding high-quality articles for developers who use AI tools daily.
 Your task is to find practical, actionable content — NOT general AI news.
@@ -100,6 +101,20 @@ Rules:
 - Articles should contain concrete techniques, code examples, or measurable insights
 - No sponsored content, generic AI hype, or press releases
 - No pure news about model releases unless it directly affects developer workflow
+- 2–4 targeted searches, then output JSON immediately
+- If nothing relevant found, output an empty array []
+- Output ONLY valid JSON — no preamble, no explanation"""
+
+# 에이전트용: 일반 AI 뉴스 수집 허용 (models, company_news, arxiv_papers 등)
+SYSTEM_RESEARCH_NEWS = """\
+You are a focused researcher finding high-quality AI news articles for a daily Discord briefing.
+Your task is to find recent, relevant AI news across all topics.
+
+Rules:
+- Find real articles published within 48 hours
+- Include model releases, research papers, company announcements, and industry news
+- Also include developer tools, tutorials, and practical guides when relevant
+- No sponsored content, clickbait, or pure press releases
 - 2–4 targeted searches, then output JSON immediately
 - If nothing relevant found, output an empty array []
 - Output ONLY valid JSON — no preamble, no explanation"""
@@ -174,11 +189,17 @@ def _research_round(
     exclude_urls: list[str],
     already_found_urls: set[str],
     count: int,
+    system_prompt: str | None = None,
 ) -> list[dict]:
     """
     단일 리서치 라운드: 지정 토픽에 집중해 기사를 수집합니다.
     실패 시 빈 리스트를 반환해 전체 루프가 중단되지 않도록 합니다.
+
+    Args:
+        system_prompt: None이면 기본 _SYSTEM_RESEARCH(개발자 워크플로우 중심)를 사용.
+                       SYSTEM_RESEARCH_NEWS를 전달하면 일반 AI 뉴스 수집 모드로 동작.
     """
+    used_system = system_prompt if system_prompt is not None else _SYSTEM_RESEARCH
     all_excluded = list(set(exclude_urls) | already_found_urls)
 
     lines = [
@@ -208,7 +229,7 @@ def _research_round(
             model=CLAUDE_MODEL,
             max_tokens=4000,
             tools=[{"type": "web_search_20260209", "name": "web_search"}],
-            system=_SYSTEM_RESEARCH,
+            system=used_system,
             messages=[{"role": "user", "content": "\n".join(lines)}],
         ) as stream:
             response = stream.get_final_message()
@@ -228,7 +249,7 @@ def _research_round(
                 model=CLAUDE_MODEL,
                 max_tokens=4000,
                 tools=[{"type": "web_search_20260209", "name": "web_search"}],
-                system=_SYSTEM_RESEARCH,
+                system=used_system,
                 messages=[{"role": "user", "content": "\n".join(lines)}],
             ) as stream:
                 response = stream.get_final_message()

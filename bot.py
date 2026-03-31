@@ -2,14 +2,13 @@
 Discord 봇 본체
 
 주요 흐름:
-  1. 매일 새벽 3시(KST): Claude 웹 리서치(curator) → 상위 5개 게시
-  2. Claude 리서치 실패 시: 기존 크롤러(crawlers) 폴백
-  3. 각 기사 임베드에 👍/👎 반응 자동 추가 → 선호도 학습
-  4. !more [n]  : 추가 기사 n개 (Claude가 이미 게시된 URL 제외 후 새로 리서치)
-  5. !crawl     : 즉시 브리핑 (관리자)
-  6. !stats     : 선호도 통계
-  7. !reset     : 선호도 초기화 (관리자)
-  8. !help_ai   : 명령어 목록
+  1. 매일 새벽 3시(KST): Claude 에이전트 큐레이션 → 상위 5개 게시
+  2. 각 기사 임베드에 👍/👎 반응 자동 추가 → 선호도 학습
+  3. !more [n]  : 추가 기사 n개 (Claude가 이미 게시된 URL 제외 후 새로 리서치)
+  4. !crawl     : 즉시 브리핑 (관리자)
+  5. !stats     : 선호도 통계
+  6. !reset     : 선호도 초기화 (관리자)
+  7. !help_ai   : 명령어 목록
 """
 import asyncio
 import datetime
@@ -19,7 +18,6 @@ import discord
 from discord.ext import commands, tasks
 
 import database as db
-import curator as ai_curator
 import token_tracker
 from ranker import rank_articles, apply_feedback
 from agents import news_curation_agent

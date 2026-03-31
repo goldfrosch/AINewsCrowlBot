@@ -26,7 +26,42 @@ import anthropic
 import database as db
 import token_tracker
 from config import ANTHROPIC_API_KEY, AI_KEYWORDS, CLAUDE_MODEL
-from curator import _research_round, _extract_json_array
+
+_SYSTEM_RESEARCH = """\
+You are a focused researcher finding high-quality AI news articles for a daily Discord briefing.
+Your task is to find recent, relevant AI news across all topics.
+
+Rules:
+- Find real articles published within 48 hours
+- Include model releases, research papers, company announcements, and industry news
+- Also include developer tools, tutorials, and practical guides when relevant
+- No sponsored content, clickbait, or pure press releases
+- 2–4 targeted searches, then output JSON immediately
+- If nothing relevant found, output an empty array []
+- Output ONLY valid JSON — no preamble, no explanation"""
+
+
+def _extract_json_array(text: str) -> list[dict]:
+    """응답 텍스트에서 마지막 JSON 배열을 추출합니다."""
+    start = text.rfind("[")
+    if start == -1:
+        return []
+    depth = 0
+    end = -1
+    for i, ch in enumerate(text[start:], start):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end == -1:
+        return []
+    try:
+        return json.loads(text[start:end])
+    except json.JSONDecodeError:
+        return []
 
 # ── 에이전트 문서 로더 ─────────────────────────────────────────────────────────
 
@@ -105,16 +140,79 @@ def _tool_find_ai_articles(
     """지정 토픽의 AI 기사를 웹 검색으로 수집한다."""
     topic_desc = _TOPIC_DESC.get(topic, topic)
     exclude_urls = db.get_todays_posted_urls()
+    all_excluded = list(set(exclude_urls) | already_collected)
 
-    articles = _research_round(
-        client=client,
-        round_num=1,
-        topic_name=topic,
-        topic_desc=topic_desc,
-        exclude_urls=exclude_urls,
-        already_found_urls=already_collected,
-        count=count,
-    )
+    lines = [
+        f"Find up to {count} AI news articles specifically about:",
+        f"**{topic_desc}**",
+        "",
+        "Requirements: published within 48 hours, real news only.",
+        "Run 2–4 targeted searches, then output JSON.",
+        "",
+    ]
+    if all_excluded:
+        lines.append("Skip these URLs (already collected):")
+        for url in all_excluded[:40]:
+            lines.append(f"- {url}")
+        lines.append("")
+    lines += [
+        f"Output a JSON array of up to {count} items:",
+        '[{"url":"...","title":"...","source":"...","description":"2-3 sentences","author":"","published_at":"YYYY-MM-DD","curator_reason":"one sentence"}]',
+        "If nothing found: []",
+    ]
+
+    raw_articles: list[dict] = []
+    try:
+        _t0 = time.perf_counter()
+        with client.messages.stream(
+            model=CLAUDE_MODEL,
+            max_tokens=4000,
+            tools=[{"type": "web_search_20260209", "name": "web_search"}],
+            system=_SYSTEM_RESEARCH,
+            messages=[{"role": "user", "content": "\n".join(lines)}],
+        ) as stream:
+            response = stream.get_final_message()
+        token_tracker.log_token_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            caller=f"agent_find_{topic}",
+            elapsed_seconds=round(time.perf_counter() - _t0, 2),
+        )
+        for block in response.content:
+            if block.type == "text":
+                data = _extract_json_array(block.text)
+                if data:
+                    raw_articles = data
+                    break
+    except anthropic.RateLimitError:
+        print(f"[FindArticles] ({topic}): RateLimit — 30초 대기 후 재시도")
+        time.sleep(30)
+        try:
+            _t0 = time.perf_counter()
+            with client.messages.stream(
+                model=CLAUDE_MODEL,
+                max_tokens=4000,
+                tools=[{"type": "web_search_20260209", "name": "web_search"}],
+                system=_SYSTEM_RESEARCH,
+                messages=[{"role": "user", "content": "\n".join(lines)}],
+            ) as stream:
+                response = stream.get_final_message()
+            token_tracker.log_token_usage(
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+                caller=f"agent_find_{topic}_retry",
+                elapsed_seconds=round(time.perf_counter() - _t0, 2),
+            )
+            for block in response.content:
+                if block.type == "text":
+                    data = _extract_json_array(block.text)
+                    if data:
+                        raw_articles = data
+                        break
+        except Exception as e:
+            print(f"[FindArticles] ({topic}): 재시도 실패 → 건너뜀 ({e})")
+    except Exception as e:
+        print(f"[FindArticles] ({topic}): 오류 → 건너뜀 ({e})")
 
     # 필드 정규화
     cleaned = [
@@ -126,7 +224,7 @@ def _tool_find_ai_articles(
             "published_at":   a.get("published_at", ""),
             "curator_reason": a.get("curator_reason", ""),
         }
-        for a in articles
+        for a in raw_articles
         if a.get("url") and a.get("title")
     ]
 

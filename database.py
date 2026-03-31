@@ -54,7 +54,7 @@ def init_db() -> None:
                 discord_message_id TEXT,
                 channel_id         TEXT,
                 keywords           TEXT    DEFAULT '[]',
-                crawled_at         TEXT    DEFAULT (datetime('now'))
+                crawled_at         TEXT    DEFAULT (datetime('now', '+9 hours'))
             );
 
             CREATE TABLE IF NOT EXISTS source_preferences (
@@ -62,7 +62,7 @@ def init_db() -> None:
                 multiplier     REAL    DEFAULT 1.0,
                 total_likes    INTEGER DEFAULT 0,
                 total_dislikes INTEGER DEFAULT 0,
-                last_updated   TEXT    DEFAULT (datetime('now'))
+                last_updated   TEXT    DEFAULT (datetime('now', '+9 hours'))
             );
 
             CREATE TABLE IF NOT EXISTS keyword_preferences (
@@ -70,7 +70,7 @@ def init_db() -> None:
                 multiplier     REAL    DEFAULT 1.0,
                 total_likes    INTEGER DEFAULT 0,
                 total_dislikes INTEGER DEFAULT 0,
-                last_updated   TEXT    DEFAULT (datetime('now'))
+                last_updated   TEXT    DEFAULT (datetime('now', '+9 hours'))
             );
         """)
 
@@ -120,7 +120,7 @@ def mark_as_posted(article_id: int, message_id: str, channel_id: str) -> None:
             SET status = 'posted',
                 discord_message_id = ?,
                 channel_id = ?,
-                posted_at = datetime('now')
+                posted_at = datetime('now', '+9 hours')
             WHERE id = ?
             """,
             (message_id, channel_id, article_id),
@@ -174,7 +174,7 @@ def update_source_preference(source: str, liked: bool) -> None:
                 multiplier     = MAX(?, MIN(?, multiplier + ?)),
                 total_likes    = total_likes + ?,
                 total_dislikes = total_dislikes + ?,
-                last_updated   = datetime('now')
+                last_updated   = datetime('now', '+9 hours')
             """,
             (
                 source,
@@ -201,7 +201,7 @@ def update_keyword_preference(keyword: str, liked: bool) -> None:
                 multiplier     = MAX(?, MIN(?, multiplier + ?)),
                 total_likes    = total_likes + ?,
                 total_dislikes = total_dislikes + ?,
-                last_updated   = datetime('now')
+                last_updated   = datetime('now', '+9 hours')
             """,
             (
                 keyword,
@@ -251,7 +251,7 @@ def get_todays_posted_urls() -> list[str]:
             """
             SELECT url FROM articles
             WHERE status = 'posted'
-              AND date(posted_at) = date('now', 'localtime')
+              AND date(posted_at) = date('now', '+9 hours')
             """
         ).fetchall()
     return [r["url"] for r in rows]
