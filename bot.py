@@ -315,6 +315,46 @@ async def cmd_stats(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
+@bot.command(name="analyze")
+@is_admin_or_allowed()
+async def cmd_analyze(ctx: commands.Context):
+    """선호도 심층 분석을 즉시 실행합니다. (관리자 전용)"""
+    status_msg = await ctx.send("🔍 선호도 분석 중…")
+    try:
+        analysis = await asyncio.to_thread(run_preference_analysis)
+        profile  = await asyncio.to_thread(save_preference_profile, analysis)
+
+        hints   = profile["curation_hints"]
+        tiered  = profile["tiered_profile"]
+
+        embed = discord.Embed(
+            title="🧠 선호도 분석 완료",
+            description=analysis["summary"],
+            color=discord.Color.from_rgb(108, 77, 217),
+        )
+
+        if hints["boost_sources"]:
+            embed.add_field(name="✅ 선호 소스", value=", ".join(hints["boost_sources"]), inline=False)
+        if hints["avoid_sources"]:
+            embed.add_field(name="❌ 비선호 소스", value=", ".join(hints["avoid_sources"]), inline=False)
+        if hints["focus_keywords"]:
+            embed.add_field(name="🔑 선호 키워드", value=", ".join(hints["focus_keywords"]), inline=False)
+        if hints["skip_keywords"]:
+            embed.add_field(name="🚫 비선호 키워드", value=", ".join(hints["skip_keywords"]), inline=False)
+
+        embed.add_field(
+            name="신뢰도",
+            value=f"`{hints['confidence']}`  (데이터 윈도우: {hints['data_window']})",
+            inline=False,
+        )
+        embed.set_footer(text=f"분석 시각: {profile['generated_at'][:19].replace('T', ' ')}")
+
+        await status_msg.delete()
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await status_msg.edit(content=f"❌ 선호도 분석 실패: {e}")
+
+
 @bot.command(name="reset")
 @is_admin_or_allowed()
 async def cmd_reset(ctx: commands.Context):
@@ -414,8 +454,9 @@ async def cmd_help(ctx: commands.Context):
     embed.add_field(
         name="관리자",
         value=(
-            "`!crawl`  — 즉시 브리핑 실행\n"
-            "`!reset`  — 학습된 선호도 초기화"
+            "`!crawl`    — 즉시 브리핑 실행\n"
+            "`!analyze`  — 선호도 심층 분석 즉시 실행\n"
+            "`!reset`    — 학습된 선호도 초기화"
         ),
         inline=False,
     )
