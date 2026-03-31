@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find . -type f -name *.md -o -name *.json -o -name *.txt -o -name *.toml -o -name *.yml -o -name *.yaml -o -name *.py -o -name Makefile -o -name *.sh)"
+      "Bash(find . -type f -name *.md -o -name *.json -o -name *.txt -o -name *.toml -o -name *.yml -o -name *.yaml -o -name *.py -o -name Makefile -o -name *.sh)",
+      "WebFetch(domain:skills.sh)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npx --yes skillsadd wshobson/agents)",
+      "Bash(gh api:*)",
+      "Bash(curl -s \"https://api.github.com/repos/wshobson/agents/contents/\")",
+      "Bash(curl -s \"https://api.github.com/repos/supercent-io/skills-template/contents/\")",
+      "Bash(curl:*)",
+      "Bash(python3 -c \":*)"
     ]
   }
 }

@@ -19,8 +19,9 @@ from discord.ext import commands, tasks
 
 import database as db
 import token_tracker
+import anthropic
 from ranker import rank_articles, apply_feedback
-from agents import news_curation_agent
+import curator
 from agents.preference_analysis import run_preference_analysis, save_preference_profile, load_preference_profile
 from config import (
     DISCORD_BOT_TOKEN,
@@ -31,6 +32,7 @@ from config import (
     DAILY_POST_HOUR,
     TIMEZONE,
     ALLOWED_USER_IDS,
+    ANTHROPIC_API_KEY,
 )
 
 KST = ZoneInfo(TIMEZONE)
@@ -192,35 +194,38 @@ async def _research_and_post(
         if pref_profile:
             print(f"[브리핑] 선호도 프로파일 로드 — {pref_profile.get('summary', '')}")
 
+        exclude_urls = db.get_todays_posted_urls()
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         raw_articles = await asyncio.to_thread(
-            news_curation_agent.run,
+            curator._single_research,
+            client,
             count,
-            None,           # topics: 기본값 사용
-            pref_profile,   # external_preferences
+            exclude_urls,
+            pref_profile or {},
         )
 
         if raw_articles:
             new_count = sum(1 for a in raw_articles if db.upsert_article({
-                "url":           a.get("url", ""),
-                "title":         a.get("title", "제목 없음"),
-                "source":        a.get("source", "Unknown"),
-                "description":   a.get("description", ""),
-                "author":        a.get("author", ""),
-                "image_url":     a.get("image_url", ""),
-                "published_at":  a.get("published_at", ""),
-                "platform_score": 100,
-                "keywords":      "[]",
+                "url":           a.url,
+                "title":         a.title,
+                "source":        a.source,
+                "description":   a.description,
+                "author":        a.author,
+                "image_url":     "",
+                "published_at":  a.published_at,
+                "platform_score": a.platform_score,
+                "keywords":      a.keywords,
             }))
             await status_msg.edit(
-                content=f"✅ Claude 에이전트 큐레이션 완료 — {len(raw_articles)}개 선정 ({new_count}개 신규)"
+                content=f"✅ Claude 큐레이션 완료 — {len(raw_articles)}개 선정 ({new_count}개 신규)"
             )
             pending = db.get_pending_articles(limit=count + 10)
             articles_to_post = rank_articles(pending)[:count]
         else:
-            await status_msg.edit(content="⚠️ Claude 에이전트 큐레이션 결과가 없습니다.")
+            await status_msg.edit(content="⚠️ Claude 큐레이션 결과가 없습니다.")
 
     except Exception as e:
-        await status_msg.edit(content=f"❌ Claude 에이전트 실패: {e}")
+        await status_msg.edit(content=f"❌ Claude 큐레이션 실패: {e}")
         return
 
     if not articles_to_post:
