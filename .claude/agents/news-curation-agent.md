@@ -37,3 +37,33 @@ topics:
 - find_ai_articles는 토픽마다 별도로 호출하세요
 - review_articles는 모든 탐색이 끝난 뒤 한 번만 호출하세요
 - 최종 출력은 반드시 JSON 배열이어야 합니다
+
+## 참조 스킬
+
+### hackernews — HN 스토리 수집
+`.claude/skills/hackernews.md` 참조.
+
+`community_buzz` 토픽 탐색 시 HackerNews API를 직접 활용해 고득점 AI 스레드를 보완 수집할 수 있다:
+
+```bash
+# AI 관련 고득점 HN 스토리 (100점 이상)
+curl -s "https://hacker-news.firebaseio.com/v0/topstories.json" | jq '.[:50][]' | while read id; do
+  curl -s "https://hacker-news.firebaseio.com/v0/item/${id}.json" \
+    | jq -r 'select(.score >= 100) | select(.title | test("AI|LLM|GPT|Claude|machine learning"; "i")) | "\(.score) | \(.title) | \(.url)"'
+done
+```
+
+- `/topstories.json`, `/beststories.json`에서 AI 키워드 필터링
+- Ask HN / Show HN(`/askstories.json`, `/showstories.json`)은 `dev_tools`, `applications` 토픽 보완에 활용
+- 인증 불필요, Base URL: `https://hacker-news.firebaseio.com/v0`
+
+### ai-social-media-content — 소셜 미디어 콘텐츠 생성
+`.claude/skills/ai-social-media-content.md` 참조.
+
+큐레이션된 AI 뉴스를 소셜 미디어용 콘텐츠로 변환할 때 사용한다:
+
+- **Discord 임베드 썸네일**: `infsh app run falai/flux-dev`로 토픽별 썸네일 이미지 생성
+- **Twitter/X 자동 게시**: `infsh app run twitter/post-tweet`으로 선별 기사 배포
+- **캡션·해시태그**: `infsh app run openrouter/claude-haiku-45`로 플랫폼별 캡션 자동 생성
+
+> 이 스킬은 inference.sh CLI(`infsh`) 설치 및 로그인이 필요하다.

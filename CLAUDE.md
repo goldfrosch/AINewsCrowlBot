@@ -56,3 +56,5 @@ python main.py
 | [`.claude/skills/preference-intelligence.md`](.claude/skills/preference-intelligence.md) | 선호도 심층 분석·티어링·큐레이션 힌트 생성 |
 | [`.claude/skills/article-finder.md`](.claude/skills/article-finder.md)                   | 웹 검색 기반 AI 기사 탐색 패턴             |
 | [`.claude/skills/article-reviewer.md`](.claude/skills/article-reviewer.md)               | 기사 품질 검토·필터링·랭킹 파이프라인      |
+| [`.claude/skills/hackernews.md`](.claude/skills/hackernews.md)                           | HN API로 고득점 AI 스레드 수집 패턴        |
+| [`.claude/skills/ai-social-media-content.md`](.claude/skills/ai-social-media-content.md) | inference.sh로 소셜 미디어 콘텐츠 생성     |
