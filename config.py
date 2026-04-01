@@ -31,7 +31,7 @@ LINKEDIN_LI_AT: str = os.getenv("LINKEDIN_LI_AT", "")
 # ── 스케줄 설정 ───────────────────────────────────
 TIMEZONE = "Asia/Seoul"
 PREFERENCE_ANALYSIS_HOUR = 2  # 새벽 2시 KST: 선호도 분석
-DAILY_POST_HOUR = 10           # 오전 10시 KST: 뉴스 브리핑
+DAILY_POST_HOUR = 6           # 오전 6시 KST: 뉴스 브리핑
 
 # ── 게시 설정 ─────────────────────────────────────
 ARTICLES_PER_POST = 5       # 하루 기본 게시 수
