@@ -12,6 +12,7 @@ Discord 봇 본체
 """
 import asyncio
 import datetime
+import json
 from zoneinfo import ZoneInfo
 
 import discord
@@ -214,7 +215,7 @@ async def _research_and_post(
                 "image_url":     "",
                 "published_at":  a.published_at,
                 "platform_score": a.platform_score,
-                "keywords":      a.keywords,
+                "keywords":      json.dumps(a.keywords, ensure_ascii=False) if isinstance(a.keywords, list) else (a.keywords or "[]"),
             }))
             await status_msg.edit(
                 content=f"✅ Claude 큐레이션 완료 — {len(raw_articles)}개 선정 ({new_count}개 신규)"
@@ -276,7 +277,7 @@ async def cmd_more(ctx: commands.Context, count: int = ARTICLES_PER_POST):
 @is_admin_or_allowed()
 async def cmd_crawl(ctx: commands.Context):
     """즉시 브리핑을 실행합니다. (관리자 전용)"""
-    await _research_and_post(ctx.channel, count=ARTICLES_PER_POST, is_daily=True)
+    await _research_and_post(ctx.channel, count=ARTICLES_PER_POST, is_daily=False)
 
 
 @bot.command(name="stats")
