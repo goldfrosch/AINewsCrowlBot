@@ -1,18 +1,19 @@
 # AINewsCrawlBot
 
-매일 새벽 3시(KST)에 AI 뉴스·논문·개발 도구를 Claude로 자동 큐레이션해 Discord에 게시하는 봇.
+매일 오전 6시(KST)에 AI 뉴스·논문·개발 도구를 Claude로 자동 큐레이션해 Discord에 게시하는 봇.
 사용자의 👍/👎 반응을 학습해 다음 날 브리핑의 소스·키워드 가중치를 자동으로 조정한다.
 
 ---
 
 ## 주요 기능
 
-- **자동 브리핑** — 매일 03:00 KST에 AI 뉴스 상위 5개를 Discord 채널에 게시
-- **Claude 웹 리서치** — `web_search` tool-use로 최신 기사를 실시간 탐색
+- **자동 브리핑** — 매일 06:00 KST에 AI 뉴스 상위 5개를 Discord 채널에 게시
+- **Claude 웹 리서치** — `web_search_20260209` tool-use로 최신 기사를 실시간 탐색
 - **선호도 학습** — 👍/👎 반응 누적 → 소스·키워드 배율 자동 조정
 - **새벽 선호도 분석** — 02:00 KST에 DB 데이터를 심층 분석해 큐레이션 힌트 생성
+- **Ralph Loop 큐레이션** — 다중 라운드 리서치(최대 10토픽) → 후보 풀 → Claude 최종 선별
 - **에이전트 큐레이션** — 3단계 agentic loop(선호도 분석 → 기사 탐색 → 품질 검토)
-- **토큰 사용량 추적** — Anthropic API 호출 비용을 일별/윈도우별로 모니터링
+- **토큰 사용량 추적** — Anthropic API 호출 비용을 일별/5시간 윈도우별로 모니터링
 
 ---
 
@@ -28,6 +29,8 @@ main.py
    ├─ ranker.py                  기사 점수 계산 & 피드백 처리
    ├─ database.py                SQLite CRUD (articles, preferences)
    ├─ token_tracker.py           API 토큰 사용량 로깅
+   ├─ crawlers/
+   │  └─ base.py                 Article 데이터클래스
    └─ config.py                  환경변수 & 전역 상수
 ```
 
@@ -37,11 +40,10 @@ main.py
 [02:00 KST] 선호도 분석 에이전트
     └─ DB 피드백 읽기 → 선호 소스/키워드 프로파일 생성 → data/preference_profile.json 저장
 
-[03:00 KST] 뉴스 큐레이션 에이전트
-    ├─ Step 1: analyze_preferences  — 저장된 선호도 프로파일 로드
-    ├─ Step 2: find_ai_articles     — 토픽별 웹 검색 (다중 호출)
-    └─ Step 3: review_articles      — 스팸 필터 + Claude 심층 검토 → 상위 N개 선별
-         └─ Discord 게시 (임베드 + 👍/👎 반응 자동 추가)
+[06:00 KST] 뉴스 큐레이션 에이전트 (curator.py)
+    ├─ 단일 호출 모드: 웹 검색 1회로 기사 수집 (기본)
+    ├─ Ralph Loop 모드: 토픽별 최대 10라운드 리서치 → 후보 풀 → Claude 최종 선별
+    └─ Discord 게시 (임베드 + 👍/👎 반응 자동 추가)
 ```
 
 ### 랭킹 공식
@@ -114,6 +116,7 @@ python main.py
 | `!tokens` | 전체 | Claude 토큰 사용량 (오늘/5시간 윈도우/전체 평균) |
 | `!help_ai` | 전체 | 명령어 목록 |
 | `!crawl` | 관리자 | 즉시 브리핑 실행 |
+| `!analyze` | 관리자 | 선호도 심층 분석 즉시 실행 |
 | `!reset` | 관리자 | 학습된 선호도 초기화 |
 
 각 기사 임베드에 달린 👍/👎 반응을 누르면 Claude의 리서치 방향이 취향에 맞게 조정된다.
@@ -122,17 +125,22 @@ python main.py
 
 ## 큐레이션 토픽
 
-에이전트가 탐색하는 기본 토픽 목록:
+Ralph Loop 활성화 시 탐색하는 기본 토픽 목록 (`curator.py`의 `_TOPICS`):
 
 | 토픽 | 설명 |
 |------|------|
-| `models` | 최신 LLM 모델 출시·벤치마크 |
-| `company_news` | AI 기업 주요 뉴스 |
-| `arxiv_papers` | 주목할 만한 논문 |
-| `dev_tools` | AI 개발 도구·SDK |
-| `korean_news` | 국내 AI 뉴스 (한국어) |
+| `claude_code_tips` | Claude Code CLI 사용법, 워크플로우, MCP 서버 |
+| `prompt_engineering` | 프롬프트 엔지니어링 기법 (CoT, few-shot 등) |
+| `ai_coding_tools` | Cursor, Copilot, Windsurf 등 AI 코딩 도구 |
+| `mcp_tools` | Model Context Protocol, tool-use 패턴 |
+| `dev_productivity` | AI 활용 개발 생산성, 코드 리뷰, 테스트 생성 |
+| `llm_best_practices` | LLM 프로덕션 운영, RAG, 비용 최적화 |
+| `agent_patterns` | AI 에이전트 아키텍처, LangChain, CrewAI |
+| `korean_practitioner` | 한국어 AI 실전 활용 아티클 |
+| `community_tips` | HN, Reddit 등 개발자 커뮤니티 실전 팁 |
+| `tutorials_deep_dive` | 심층 튜토리얼, API 연동, 파인튜닝 |
 
-> 토픽 목록과 설명은 `.claude/agents/news-curation-agent.md`에서 관리한다.
+> 단일 호출 모드(기본)에서는 위 토픽을 통합하여 한 번에 검색한다.
 
 ---
 
@@ -182,3 +190,4 @@ python agents/news_curation_agent.py --count 10 --topics models,dev_tools,korean
 - **Anthropic SDK** — Claude API (`web_search_20260209` tool-use)
 - **SQLite** — 기사 저장 및 선호도 관리
 - **feedparser / BeautifulSoup4** — RSS 크롤러 폴백
+- **PyYAML** — 에이전트 설정 파일 파싱
