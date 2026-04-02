@@ -2,9 +2,9 @@
 Claude 기반 AI 뉴스 큐레이션 엔진
 
 흐름:
-  1. web_search 도구로 2–4회 검색
-  2. 개발자 워크플로우 중심 아티클 수집 (튜토리얼, 프롬프트 엔지니어링, AI 코딩 도구 등)
-  3. JSON 배열로 반환
+  1. news_curation_agent.run() — 3단계 agentic loop
+       analyze_preferences → find_ai_articles (토픽별) → review_articles
+  2. 실패 시 단순 웹 검색 1회 폴백
 """
 import json
 import time
@@ -14,13 +14,14 @@ from crawlers.base import Article
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 import token_tracker
 
-# ─── 시스템 프롬프트 ──────────────────────────────────────────────────────────
+# ─── 시스템 프롬프트 (폴백용) ──────────────────────────────────────────────────
 
 _SYSTEM_RESEARCH = """\
-You are a focused researcher finding high-quality articles for developers who use AI tools daily.
+You are a focused researcher finding high-quality articles for developers who build and operate AI systems.
 Your task is to find practical, actionable content — NOT general AI news.
 
-Target reader: software engineer who uses Claude Code, Cursor, or similar AI coding tools.
+Target reader: software engineer working on agentic systems, multi-agent orchestration,
+AI-assisted code modification, or LLM infrastructure and evaluation harnesses.
 
 Rules:
 - Prioritize tutorials, how-to guides, best practices, and case studies over news
@@ -84,36 +85,20 @@ def _to_articles(data: list[dict]) -> list[Article]:
     return articles
 
 
-# ─── 공개 API ─────────────────────────────────────────────────────────────────
+# ─── 폴백: 단순 웹 검색 1회 ──────────────────────────────────────────────────
 
-def research(
+def _fallback_research(
     count: int,
-    exclude_urls: list[str] | None = None,
-    preferences: dict | None = None,
+    exclude_urls: list[str],
+    preferences: dict,
 ) -> list[Article]:
-    """
-    웹 검색으로 개발자용 AI 아티클을 수집합니다.
-
-    Args:
-        count:        수집할 기사 수
-        exclude_urls: 이미 게시된 URL 목록 (중복 방지)
-        preferences:  DB 소스/키워드 선호도
-
-    Returns:
-        Article 리스트 (len ≤ count)
-    """
-    if not ANTHROPIC_API_KEY:
-        raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
-
-    exclude_urls = exclude_urls or []
-    preferences = preferences or {}
-
+    """에이전트 실패 시 웹 검색 1회로 기사를 수집합니다."""
     liked_kws = [k["keyword"] for k in preferences.get("keywords", []) if k["multiplier"] > 1.1][:5]
     pref_hint = f"\nUser enjoys these topics: {', '.join(liked_kws)}" if liked_kws else ""
 
     lines = [
-        f"Find {count} high-quality articles for developers who use AI coding tools like Claude Code or Cursor.",
-        "Focus on: practical tutorials, prompt engineering tips, AI coding workflows, MCP/tool-use guides, developer productivity.",
+        f"Find {count} high-quality articles for developers who build and operate AI systems.",
+        "Focus on: multi-agent orchestration, harness engineering for LLMs, AI-assisted complex code modification, prompt engineering, agentic coding workflows.",
         "NOT general AI news — only content with actionable techniques or concrete examples.",
         pref_hint,
         "Requirements: real articles only, no sponsored content, no pure press releases.",
@@ -149,7 +134,7 @@ def research(
         token_tracker.log_token_usage(
             response.usage.input_tokens,
             response.usage.output_tokens,
-            caller="curator_research",
+            caller="curator_fallback",
             elapsed_seconds=round(time.perf_counter() - _t0, 2),
         )
 
@@ -157,11 +142,11 @@ def research(
             if block.type == "text":
                 data = _extract_json_array(block.text)
                 if data:
-                    print(f"[Curator] 완료: {len(data)}개 수집")
+                    print(f"[Curator] 폴백 완료: {len(data)}개 수집")
                     return _to_articles(data[:count])
 
     except anthropic.RateLimitError:
-        print("[Curator] RateLimit — 30초 대기 후 재시도")
+        print("[Curator] 폴백 RateLimit — 30초 대기 후 재시도")
         time.sleep(30)
         try:
             _t0 = time.perf_counter()
@@ -176,22 +161,58 @@ def research(
             token_tracker.log_token_usage(
                 response.usage.input_tokens,
                 response.usage.output_tokens,
-                caller="curator_research_retry",
+                caller="curator_fallback_retry",
                 elapsed_seconds=round(time.perf_counter() - _t0, 2),
             )
             for block in response.content:
                 if block.type == "text":
                     data = _extract_json_array(block.text)
                     if data:
-                        print(f"[Curator] 재시도 완료: {len(data)}개 수집")
+                        print(f"[Curator] 폴백 재시도 완료: {len(data)}개 수집")
                         return _to_articles(data[:count])
         except Exception as e:
-            print(f"[Curator] 재시도 실패: {e}")
+            print(f"[Curator] 폴백 재시도 실패: {e}")
 
     except anthropic.APIStatusError as e:
-        print(f"[Curator] API 오류 ({e.status_code}): {e}")
+        print(f"[Curator] 폴백 API 오류 ({e.status_code}): {e}")
 
     except Exception as e:
-        print(f"[Curator] 예상치 못한 오류: {e}")
+        print(f"[Curator] 폴백 예상치 못한 오류: {e}")
 
     return []
+
+
+# ─── 공개 API ─────────────────────────────────────────────────────────────────
+
+def research(
+    count: int,
+    exclude_urls: list[str] | None = None,
+    preferences: dict | None = None,
+) -> list[Article]:
+    """
+    뉴스 큐레이션 에이전트로 개발자용 AI 아티클을 수집합니다.
+    에이전트 실패 시 단순 웹 검색으로 폴백합니다.
+
+    Args:
+        count:        수집할 기사 수
+        exclude_urls: 이미 게시된 URL 목록 (에이전트가 DB에서 직접 조회하므로 폴백 전용)
+        preferences:  DB 소스/키워드 선호도 (에이전트에 external_preferences로 전달)
+
+    Returns:
+        Article 리스트 (len ≤ count)
+    """
+    if not ANTHROPIC_API_KEY:
+        raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
+
+    from agents.news_curation_agent import run as _agent_run
+    try:
+        raw = _agent_run(target_count=count, external_preferences=preferences or {})
+        if raw:
+            articles = _to_articles(raw)
+            print(f"[Curator] 에이전트 완료: {len(articles)}개 선정")
+            return articles
+        print("[Curator] 에이전트 결과 없음 — 폴백 실행")
+    except Exception as e:
+        print(f"[Curator] 에이전트 실패 — 폴백 실행: {e}")
+
+    return _fallback_research(count, exclude_urls or [], preferences or {})

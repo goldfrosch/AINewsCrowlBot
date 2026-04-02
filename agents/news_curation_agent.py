@@ -28,14 +28,17 @@ import token_tracker
 from config import ANTHROPIC_API_KEY, AI_KEYWORDS, CLAUDE_MODEL
 
 _SYSTEM_RESEARCH = """\
-You are a focused researcher finding high-quality AI news articles for a daily Discord briefing.
-Your task is to find recent, relevant AI news across all topics.
+You are a focused researcher finding high-quality articles for developers who build and operate AI systems.
+Your task is to find practical, actionable content — NOT general AI news.
+
+Target reader: software engineer working on agentic systems, multi-agent orchestration,
+AI-assisted code modification, or LLM infrastructure and evaluation harnesses.
 
 Rules:
-- Find real articles published within 48 hours
-- Include model releases, research papers, company announcements, and industry news
-- Also include developer tools, tutorials, and practical guides when relevant
-- No sponsored content, clickbait, or pure press releases
+- Prioritize tutorials, how-to guides, best practices, and case studies over news
+- Articles should contain concrete techniques, code examples, or measurable insights
+- No sponsored content, generic AI hype, or press releases
+- No pure news about model releases unless it directly affects developer workflow
 - 2–4 targeted searches, then output JSON immediately
 - If nothing relevant found, output an empty array []
 - Output ONLY valid JSON — no preamble, no explanation"""
@@ -63,41 +66,60 @@ def _extract_json_array(text: str) -> list[dict]:
     except json.JSONDecodeError:
         return []
 
-# ── 에이전트 문서 로더 ─────────────────────────────────────────────────────────
+# ── 문서 로더 ─────────────────────────────────────────────────────────────────
 
-_AGENT_DOC_PATH = Path(__file__).resolve().parent.parent / ".claude" / "agents" / "news-curation-agent.md"
+_CLAUDE_DIR    = Path(__file__).resolve().parent.parent / ".claude"
+_AGENT_DOC_PATH = _CLAUDE_DIR / "agents" / "news-curation-agent.md"
+_SKILLS_DIR    = _CLAUDE_DIR / "skills"
+
+
+def _strip_frontmatter(text: str) -> str:
+    """YAML 프론트매터(--- ... ---)를 제거하고 본문만 반환한다."""
+    match = re.match(r"^---\n.*?\n---\n(.*)$", text, re.DOTALL)
+    return match.group(1).strip() if match else text.strip()
+
 
 def _load_agent_spec() -> dict:
     """
     .claude/agents/news-curation-agent.md 에서 설정과 시스템 프롬프트 템플릿을 로드한다.
 
     반환 키:
-        topics           — dict[str, str]  토픽명 → 설명
-        default_topics   — list[str]       기본 탐색 토픽 목록
-        system_prompt_template — str       {target_count}, {topics_list} 플레이스홀더 포함
+        topics                 — dict[str, str]  토픽명 → 설명
+        default_topics         — list[str]       기본 탐색 토픽 목록
+        system_prompt_template — str             {target_count}, {topics_list} 플레이스홀더 포함
     """
     text = _AGENT_DOC_PATH.read_text(encoding="utf-8")
-
-    # YAML 프론트매터 분리
     match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.DOTALL)
     if not match:
         raise ValueError(f"에이전트 문서 형식 오류: {_AGENT_DOC_PATH}")
-
     frontmatter = yaml.safe_load(match.group(1))
-    system_prompt_template = match.group(2).strip()
-
     return {
         "topics":                   frontmatter.get("topics", {}),
         "default_topics":           frontmatter.get("default_topics", []),
-        "system_prompt_template":   system_prompt_template,
+        "system_prompt_template":   match.group(2).strip(),
     }
 
 
-# ── 에이전트 문서에서 상수 로드 ───────────────────────────────────────────────
+def _load_skill(name: str) -> str:
+    """
+    .claude/skills/{name}.md 를 읽어 프론트매터를 제거한 본문을 반환한다.
+    파일이 없으면 빈 문자열을 반환한다.
+    """
+    path = _SKILLS_DIR / f"{name}.md"
+    if not path.exists():
+        return ""
+    return _strip_frontmatter(path.read_text(encoding="utf-8"))
+
+
+# ── 에이전트·스킬 문서에서 상수 로드 ─────────────────────────────────────────
 
 _AGENT_SPEC    = _load_agent_spec()
 _TOPIC_DESC: dict[str, str] = _AGENT_SPEC["topics"]
 _DEFAULT_TOPICS: list[str]  = _AGENT_SPEC["default_topics"]
+
+# 각 sub-agent 호출에 주입할 skill 본문 (모듈 로드 시 1회만 읽음)
+_SKILL_FINDER:   str = _load_skill("article-finder")
+_SKILL_REVIEWER: str = _load_skill("article-reviewer")
 
 _SPAM_RE = re.compile(
     r"\b(sponsored|advertisement|buy now|sign up|subscribe|promo code|affiliate)\b",
@@ -161,6 +183,11 @@ def _tool_find_ai_articles(
         "If nothing found: []",
     ]
 
+    # article-finder skill을 system prompt에 주입
+    finder_system = _SYSTEM_RESEARCH
+    if _SKILL_FINDER:
+        finder_system = f"{_SYSTEM_RESEARCH}\n\n---\n\n{_SKILL_FINDER}"
+
     raw_articles: list[dict] = []
     try:
         _t0 = time.perf_counter()
@@ -168,7 +195,7 @@ def _tool_find_ai_articles(
             model=CLAUDE_MODEL,
             max_tokens=4000,
             tools=[{"type": "web_search_20260209", "name": "web_search"}],
-            system=_SYSTEM_RESEARCH,
+            system=finder_system,
             messages=[{"role": "user", "content": "\n".join(lines)}],
         ) as stream:
             response = stream.get_final_message()
@@ -193,7 +220,7 @@ def _tool_find_ai_articles(
                 model=CLAUDE_MODEL,
                 max_tokens=4000,
                 tools=[{"type": "web_search_20260209", "name": "web_search"}],
-                system=_SYSTEM_RESEARCH,
+                system=finder_system,
                 messages=[{"role": "user", "content": "\n".join(lines)}],
             ) as stream:
                 response = stream.get_final_message()
@@ -300,7 +327,11 @@ Output ONLY a JSON array of the kept articles (preserve all fields, improve cura
         response = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=6000,
-            system="You are a strict AI news curator. Output ONLY valid JSON — no explanation.",
+            system=(
+                _SKILL_REVIEWER
+                if _SKILL_REVIEWER
+                else "You are a strict AI article curator. Output ONLY valid JSON — no explanation."
+            ),
             messages=[{"role": "user", "content": prompt}],
         )
         token_tracker.log_token_usage(
@@ -356,9 +387,11 @@ _TOOLS = [
                 "topic": {
                     "type": "string",
                     "description": (
-                        "탐색할 AI 토픽. 가능한 값: "
-                        "models, company_news, arxiv_papers, dev_tools, korean_news, "
-                        "safety_policy, research_labs, applications, community_buzz, hardware_infra"
+                        "탐색할 AI 개발자 토픽. 가능한 값: "
+                        "claude_code_tips, prompt_engineering, ai_coding_tools, "
+                        "multi_agent_orchestration, harness_engineering, ai_code_modification, "
+                        "dev_productivity, llm_best_practices, "
+                        "korean_practitioner, community_tips, tutorials_deep_dive"
                     ),
                 },
                 "count": {
