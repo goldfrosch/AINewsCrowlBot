@@ -20,7 +20,7 @@ from discord.ext import commands, tasks
 
 import database as db
 import token_tracker
-import anthropic
+
 from ranker import rank_articles, apply_feedback
 import curator
 from agents.preference_analysis import run_preference_analysis, save_preference_profile, load_preference_profile
@@ -33,7 +33,6 @@ from config import (
     DAILY_POST_HOUR,
     TIMEZONE,
     ALLOWED_USER_IDS,
-    ANTHROPIC_API_KEY,
 )
 
 KST = ZoneInfo(TIMEZONE)
@@ -196,10 +195,8 @@ async def _research_and_post(
             print(f"[브리핑] 선호도 프로파일 로드 — {pref_profile.get('summary', '')}")
 
         exclude_urls = db.get_todays_posted_urls()
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         raw_articles = await asyncio.to_thread(
-            curator._single_research,
-            client,
+            curator.research,
             count,
             exclude_urls,
             pref_profile or {},
