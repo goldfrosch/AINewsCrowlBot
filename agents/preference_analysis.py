@@ -9,7 +9,7 @@ news_curation_agent.run() 이 이 파일을 읽어 큐레이션 힌트로 활용
 
 데이터 소스 제약:
   - 시간 윈도우 분석은 articles.posted_at 기준으로만 가능.
-  - source_preferences / keyword_preferences 는 이벤트별 타임스탬프가 없어
+  - source_preferences / keywords 는 이벤트별 타임스탬프가 없어
     윈도우 필터 불가 → 전체 누적 배율 참조 용도로만 사용.
 """
 import json
@@ -67,11 +67,14 @@ def get_windowed_feedback(days: int | None) -> dict:
         """).fetchall()
 
         raw_articles = conn.execute(f"""
-            SELECT keywords, likes, dislikes
-            FROM articles
-            WHERE status = 'posted'
-              AND (likes > 0 OR dislikes > 0)
+            SELECT a.likes, a.dislikes, GROUP_CONCAT(k.keyword) AS keywords_csv
+            FROM articles a
+            LEFT JOIN article_keywords ak ON ak.article_id = a.id
+            LEFT JOIN keywords k ON ak.keyword_id = k.id
+            WHERE a.status = 'posted'
+              AND (a.likes > 0 OR a.dislikes > 0)
               {time_filter}
+            GROUP BY a.id
         """).fetchall()
 
         liked_titles = conn.execute(f"""
@@ -90,10 +93,8 @@ def get_windowed_feedback(days: int | None) -> dict:
 
     kw_map: dict[str, dict] = {}
     for row in raw_articles:
-        try:
-            keywords = json.loads(row["keywords"] or "[]")
-        except (json.JSONDecodeError, TypeError):
-            keywords = []
+        kw_csv = row["keywords_csv"] or ""
+        keywords = [kw for kw in kw_csv.split(",") if kw]
         for kw in keywords:
             if not kw:
                 continue

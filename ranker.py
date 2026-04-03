@@ -58,15 +58,22 @@ def extract_keywords(text: str) -> list[str]:
 
 
 def _get_article_keywords(article: dict) -> list[str]:
-    """DB에 AI 태깅된 keywords가 있으면 사용, 없으면 제목/설명에서 추출."""
-    stored = article.get("keywords", "[]")
+    """DB에 AI 태깅된 keywords가 있으면 사용, 없으면 제목/설명에서 추출.
+    DB에서 반환된 기사는 keywords가 list[str]이고,
+    인메모리 Article 객체도 list이므로 JSON 파싱은 폴백으로만 사용."""
+    stored = article.get("keywords", [])
+    if isinstance(stored, list):
+        return stored if stored else extract_keywords(
+            article.get("title", "") + " " + article.get("description", "")
+        )
     if isinstance(stored, str):
         try:
-            stored = json.loads(stored)
+            parsed = json.loads(stored)
+            return parsed if parsed else extract_keywords(
+                article.get("title", "") + " " + article.get("description", "")
+            )
         except (json.JSONDecodeError, TypeError):
-            stored = []
-    if stored:
-        return stored
+            pass
     return extract_keywords(article.get("title", "") + " " + article.get("description", ""))
 
 

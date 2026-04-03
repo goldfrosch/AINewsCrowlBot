@@ -24,5 +24,5 @@ class Article:
             "image_url": self.image_url,
             "published_at": self.published_at,
             "platform_score": self.platform_score,
-            "keywords": json.dumps(self.keywords),
+            "keywords": self.keywords,
         }

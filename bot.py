@@ -12,7 +12,6 @@ Discord 봇 본체
 """
 import asyncio
 import datetime
-import json
 from zoneinfo import ZoneInfo
 
 import discord
@@ -212,7 +211,7 @@ async def _research_and_post(
                 "image_url":     "",
                 "published_at":  a.published_at,
                 "platform_score": a.platform_score,
-                "keywords":      json.dumps(a.keywords, ensure_ascii=False) if isinstance(a.keywords, list) else (a.keywords or "[]"),
+                "keywords":      a.keywords if isinstance(a.keywords, list) else [],
             }))
             await status_msg.edit(
                 content=f"✅ Claude 큐레이션 완료 — {len(raw_articles)}개 선정 ({new_count}개 신규)"
