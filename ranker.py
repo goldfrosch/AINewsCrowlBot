@@ -6,8 +6,10 @@
 
 - platform_score: 소스별 플랫폼 점수(HN points, Reddit upvotes, YouTube views 등)를 0~1로 정규화
 - source_multiplier: 👍/👎 누적 기반, 기본 1.0 (범위 0.1~5.0)
-- keyword_multiplier: 제목에 등장하는 AI 키워드별 배율의 평균
+- keyword_multiplier: AI 태깅 키워드가 우선, 없으면 제목/설명에서 추출
 """
+import json
+
 import database as db
 from config import AI_KEYWORDS
 
@@ -55,6 +57,19 @@ def extract_keywords(text: str) -> list[str]:
     return list(dict.fromkeys(result))  # 순서 유지하며 중복 제거
 
 
+def _get_article_keywords(article: dict) -> list[str]:
+    """DB에 AI 태깅된 keywords가 있으면 사용, 없으면 제목/설명에서 추출."""
+    stored = article.get("keywords", "[]")
+    if isinstance(stored, str):
+        try:
+            stored = json.loads(stored)
+        except (json.JSONDecodeError, TypeError):
+            stored = []
+    if stored:
+        return stored
+    return extract_keywords(article.get("title", "") + " " + article.get("description", ""))
+
+
 def rank_articles(articles: list[dict]) -> list[dict]:
     """
     기사 목록을 선호도 기반으로 정렬하고 final_score를 갱신한 뒤 반환.
@@ -68,7 +83,7 @@ def rank_articles(articles: list[dict]) -> list[dict]:
         base = _normalize(a.get("platform_score", 0.0), a.get("source", ""))
         src_m = source_mult.get(a.get("source", ""), 1.0)
 
-        kws = extract_keywords(a.get("title", "") + " " + a.get("description", ""))
+        kws = _get_article_keywords(a)
         kw_m = (
             sum(keyword_mult.get(kw, 1.0) for kw in kws) / len(kws)
             if kws else 1.0
@@ -93,9 +108,7 @@ def apply_feedback(message_id: str, liked: bool) -> bool:
     db.update_article_reaction(article["id"], liked)
     db.update_source_preference(article["source"], liked)
 
-    keywords = extract_keywords(
-        article.get("title", "") + " " + article.get("description", "")
-    )
+    keywords = _get_article_keywords(article)
     for kw in set(keywords):
         db.update_keyword_preference(kw, liked)
 

@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "claude-beginner-harness-plugin@beginner-harness": true
+  }
+}

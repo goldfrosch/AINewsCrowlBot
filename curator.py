@@ -81,6 +81,7 @@ def _to_articles(data: list[dict]) -> list[Article]:
             author=item.get("author", ""),
             published_at=item.get("published_at", ""),
             platform_score=100.0,
+            keywords=item.get("keywords", []),
         ))
     return articles
 
@@ -114,7 +115,8 @@ def _fallback_research(
 
     lines += [
         f"Output a JSON array of exactly {count} items:",
-        '[{"url":"...","title":"...","source":"...","description":"2-3 sentences","author":"","published_at":"YYYY-MM-DD","curator_reason":"one sentence"}]',
+        '[{"url":"...","title":"...","source":"...","description":"2-3 sentences","author":"","published_at":"YYYY-MM-DD","curator_reason":"one sentence","keywords":["keyword1","keyword2","keyword3"]}]',
+        "Assign 3-5 relevant AI topic keywords to each article from: claude, chatgpt, gpt-4, gemini, llm, prompt engineering, rag, fine-tuning, mcp, ai agent, agentic, langchain, vector database, embedding, ai coding, openai, anthropic",
         "If nothing found: []",
     ]
 

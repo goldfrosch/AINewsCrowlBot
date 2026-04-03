@@ -250,6 +250,7 @@ def _tool_find_ai_articles(
             "description":    a.get("description", "")[:500],
             "published_at":   a.get("published_at", ""),
             "curator_reason": a.get("curator_reason", ""),
+            "keywords":       a.get("keywords", []),
         }
         for a in raw_articles
         if a.get("url") and a.get("title")
@@ -319,8 +320,12 @@ def _tool_review_articles(
 5. PREFER: articles published within 24h over 24–48h
 
 Select the best {target_count} articles.
-Output ONLY a JSON array of the kept articles (preserve all fields, improve curator_reason if weak):
-[{{"url":"...","title":"...","source":"...","description":"...","published_at":"...","curator_reason":"..."}}]"""
+
+For each article, assign 3-5 relevant AI topic keywords from this list:
+{", ".join(AI_KEYWORDS)}
+
+Output ONLY a JSON array (preserve all fields, improve curator_reason if weak, add "keywords" array):
+[{{"url":"...","title":"...","source":"...","description":"...","published_at":"...","curator_reason":"...","keywords":["keyword1","keyword2","keyword3"]}}]"""
 
     try:
         _t0 = time.perf_counter()
