@@ -1,10 +1,9 @@
 """
 뉴스 큐레이션 에이전트 — tool-use 기반 agentic loop
 
-3단계를 자율적으로 수행한다:
+2단계를 자율적으로 수행한다:
   1. analyze_preferences  — DB 선호도 분석
-  2. find_ai_articles     — 웹 검색으로 기사 탐색 (토픽별 다중 호출 가능)
-  3. review_articles      — 품질 검토 및 최종 선별
+  2. find_ai_articles     — 웹 검색 최대 2회, 목표 수만큼 기사 수집 후 바로 반환
 
 실행:
   python agents/news_curation_agent.py [--count N] [--topics topic1,topic2]
@@ -26,7 +25,7 @@ import anthropic
 
 import database as db
 import token_tracker
-from config import AI_KEYWORDS, ANTHROPIC_API_KEY, CLAUDE_MODEL
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
 _SYSTEM_RESEARCH = """\
 You are a focused researcher finding high-quality articles for developers who build and operate AI systems.
@@ -40,7 +39,7 @@ Rules:
 - Articles should contain concrete techniques, code examples, or measurable insights
 - No sponsored content, generic AI hype, or press releases
 - No pure news about model releases unless it directly affects developer workflow
-- 2–4 targeted searches, then output JSON immediately
+- Maximum 2 targeted searches, then output JSON immediately
 - If nothing relevant found, output an empty array []
 - Output ONLY valid JSON — no preamble, no explanation"""
 
@@ -119,14 +118,8 @@ _AGENT_SPEC = _load_agent_spec()
 _TOPIC_DESC: dict[str, str] = _AGENT_SPEC["topics"]
 _DEFAULT_TOPICS: list[str] = _AGENT_SPEC["default_topics"]
 
-# 각 sub-agent 호출에 주입할 skill 본문 (모듈 로드 시 1회만 읽음)
+# article-finder skill 본문 (모듈 로드 시 1회만 읽음)
 _SKILL_FINDER: str = _load_skill("article-finder")
-_SKILL_REVIEWER: str = _load_skill("article-reviewer")
-
-_SPAM_RE = re.compile(
-    r"\b(sponsored|advertisement|buy now|sign up|subscribe|promo code|affiliate)\b",
-    re.IGNORECASE,
-)
 
 
 # ── 도구 구현 ─────────────────────────────────────────────────────────────────
@@ -174,7 +167,7 @@ def _tool_find_ai_articles(
         "Rules:",
         "- Pick the BEST articles regardless of topic distribution — quality and recency first",
         "- Real articles only, no sponsored content, no press releases",
-        "- Run 2–4 targeted searches across these topics, then output JSON",
+        "- Run at most 2 targeted searches, then output JSON",
         "",
     ]
     if all_excluded:
@@ -198,7 +191,7 @@ def _tool_find_ai_articles(
         _t0 = time.perf_counter()
         with client.messages.stream(
             model=CLAUDE_MODEL,
-            max_tokens=4000,
+            max_tokens=2000,
             tools=[{"type": "web_search_20260209", "name": "web_search"}],
             system=finder_system,
             messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -223,7 +216,7 @@ def _tool_find_ai_articles(
             _t0 = time.perf_counter()
             with client.messages.stream(
                 model=CLAUDE_MODEL,
-                max_tokens=4000,
+                max_tokens=2000,
                 tools=[{"type": "web_search_20260209", "name": "web_search"}],
                 system=finder_system,
                 messages=[{"role": "user", "content": "\n".join(lines)}],
@@ -267,105 +260,6 @@ def _tool_find_ai_articles(
         "message": f"{len(cleaned)}개 기사 수집",
     }
 
-
-def _tool_review_articles(
-    client: anthropic.Anthropic,
-    articles: list[dict],
-    preferences: dict,
-    target_count: int,
-) -> dict:
-    """수집된 기사 목록을 품질 검토 후 최종 선별 결과를 반환한다."""
-
-    # 1. 규칙 기반 빠른 필터
-    filtered: list[dict] = []
-    for a in articles:
-        text = (a.get("title", "") + " " + a.get("description", "")).lower()
-        if _SPAM_RE.search(text):
-            continue
-        if not any(kw in text for kw in AI_KEYWORDS):
-            continue
-        filtered.append(a)
-
-    # URL 기준 중복 제거
-    seen: set[str] = set()
-    deduped: list[dict] = []
-    for a in filtered:
-        url = a.get("url", "").strip().rstrip("/")
-        if url and url not in seen:
-            seen.add(url)
-            deduped.append(a)
-
-    if len(deduped) <= target_count:
-        return {
-            "kept": deduped,
-            "summary": f"필터 후 {len(deduped)}개 (Claude 검토 생략)",
-        }
-
-    # 2. Claude 심층 검토
-    liked = ", ".join(preferences.get("liked_sources", [])) or "없음"
-    disliked = ", ".join(preferences.get("disliked_sources", [])) or "없음"
-    keywords = ", ".join(preferences.get("liked_keywords", [])) or "없음"
-
-    prompt = f"""Review these AI news articles for a daily Discord briefing.
-
-## User Preferences
-- Preferred sources: {liked}
-- Disliked sources: {disliked}
-- Preferred topics: {keywords}
-
-## Articles ({len(deduped)} candidates)
-{json.dumps(deduped, ensure_ascii=False, indent=2)}
-
-## Review Criteria
-1. REJECT: sponsored/ad content, old-news roundups, clickbait
-2. REJECT: near-duplicate (same event → keep only the best one)
-3. PREFER: primary sources over secondary coverage
-4. PREFER: user's preferred sources and topic keywords
-5. PREFER: articles published within 24h over 24–48h
-
-Select the best {target_count} articles.
-
-For each article, assign 3-5 relevant AI topic keywords from this list:
-{", ".join(AI_KEYWORDS)}
-
-Output ONLY a JSON array (preserve all fields, improve curator_reason if weak, add "keywords" array):
-[{{"url":"...","title":"...","source":"...","description":"...","published_at":"...","curator_reason":"...","keywords":["keyword1","keyword2","keyword3"]}}]"""
-
-    try:
-        _t0 = time.perf_counter()
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=6000,
-            system=(
-                _SKILL_REVIEWER
-                if _SKILL_REVIEWER
-                else "You are a strict AI article curator. Output ONLY valid JSON — no explanation."
-            ),
-            messages=[{"role": "user", "content": prompt}],
-        )
-        token_tracker.log_token_usage(
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-            caller="agent_review",
-            elapsed_seconds=round(time.perf_counter() - _t0, 2),
-        )
-        for block in response.content:
-            if block.type == "text":
-                kept = _extract_json_array(block.text)
-                if kept:
-                    return {
-                        "kept": kept[:target_count],
-                        "summary": f"Claude 검토 완료: {len(deduped)}개 → {len(kept[:target_count])}개 선별",
-                    }
-    except anthropic.RateLimitError:
-        time.sleep(30)
-    except Exception as e:
-        print(f"[Reviewer] Claude 검토 오류: {e}")
-
-    return {
-        "kept": deduped[:target_count],
-        "summary": f"규칙 필터만 적용: {len(deduped[:target_count])}개 반환",
-    }
 
 
 # ── 도구 스키마 ───────────────────────────────────────────────────────────────
@@ -412,34 +306,6 @@ _TOOLS = [
                 },
             },
             "required": ["topics"],
-        },
-    },
-    {
-        "name": "review_articles",
-        "description": (
-            "수집된 기사 목록을 품질 검토한다. "
-            "광고·스팸 제거, 중복 탐지, 사용자 선호도 반영 후 최종 목록을 반환한다. "
-            "충분한 기사가 모인 후 마지막에 한 번 호출한다."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "articles": {
-                    "type": "array",
-                    "description": "검토할 기사 목록 (find_ai_articles 결과들을 합친 것)",
-                    "items": {"type": "object"},
-                },
-                "preferences": {
-                    "type": "object",
-                    "description": "사용자 선호도 (analyze_preferences 결과)",
-                },
-                "target_count": {
-                    "type": "integer",
-                    "description": "최종 선별할 기사 수",
-                    "default": 5,
-                },
-            },
-            "required": ["articles", "preferences"],
         },
     },
 ]
@@ -587,13 +453,6 @@ def run(
                         collected.add(a["url"])
                         all_found.append(a)
                 print(f" → {result['message']}")
-
-            elif name == "review_articles":
-                articles_in = inp.get("articles", all_found)
-                pref_in = inp.get("preferences", preferences)
-                t_count = int(inp.get("target_count", target_count))
-                result = _tool_review_articles(client, articles_in, pref_in, t_count)
-                print(f" → {result['summary']}")
 
             else:
                 result = {"error": f"알 수 없는 도구: {name}"}
