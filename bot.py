@@ -10,6 +10,7 @@ Discord 봇 본체
   6. !reset     : 선호도 초기화 (관리자)
   7. !help_ai   : 명령어 목록
 """
+
 import asyncio
 import datetime
 from zoneinfo import ZoneInfo
@@ -19,44 +20,43 @@ from discord.ext import commands, tasks
 
 import database as db
 import token_tracker
-
-from ranker import rank_articles, apply_feedback
-import curator
-from agents.preference_analysis import run_preference_analysis, save_preference_profile, load_preference_profile
+from agents.preference_analysis import run_preference_analysis, save_preference_profile
 from config import (
-    DISCORD_BOT_TOKEN,
-    DISCORD_CHANNEL_ID,
+    ALLOWED_USER_IDS,
     ARTICLES_PER_POST,
+    DAILY_POST_HOUR,
+    DISCORD_CHANNEL_ID,
     MORE_ARTICLES_MAX,
     PREFERENCE_ANALYSIS_HOUR,
-    DAILY_POST_HOUR,
     TIMEZONE,
-    ALLOWED_USER_IDS,
 )
+from pipeline import run_curation_pipeline
+from ranker import apply_feedback
 
 KST = ZoneInfo(TIMEZONE)
-LIKE    = "👍"
+LIKE = "👍"
 DISLIKE = "👎"
 
 _SOURCE_EMOJI: dict[str, str] = {
-    "hackernews":   "🔥",
-    "youtube":      "▶️",
-    "reddit":       "🤖",
-    "arxiv":        "📄",
-    "medium":       "📝",
-    "venturebeat":  "📰",
-    "verge":        "📰",
-    "threads":      "🧵",
-    "linkedin":     "💼",
-    "zdnet":        "🇰🇷",
-    "it조선":       "🇰🇷",
-    "ai타임스":     "🇰🇷",
+    "hackernews": "🔥",
+    "youtube": "▶️",
+    "reddit": "🤖",
+    "arxiv": "📄",
+    "medium": "📝",
+    "venturebeat": "📰",
+    "verge": "📰",
+    "threads": "🧵",
+    "linkedin": "💼",
+    "zdnet": "🇰🇷",
+    "it조선": "🇰🇷",
+    "ai타임스": "🇰🇷",
     "ars technica": "🔬",
-    "openai":       "🤖",
-    "anthropic":    "🤖",
-    "google":       "🤖",
-    "meta":         "🤖",
+    "openai": "🤖",
+    "anthropic": "🤖",
+    "google": "🤖",
+    "meta": "🤖",
 }
+
 
 def _source_emoji(source: str) -> str:
     s = source.lower()
@@ -71,14 +71,13 @@ def _make_embed(article: dict, is_ai_curated: bool = False) -> discord.Embed:
     title = article["title"][:250]
 
     is_korean = any(
-        k in article["source"].lower()
-        for k in ("zdnet", "it조선", "korea", "naver", "ai타임스", "전자신문")
+        k in article["source"].lower() for k in ("zdnet", "it조선", "korea", "naver", "ai타임스", "전자신문")
     )
 
     if is_ai_curated:
-        color = discord.Color.from_rgb(108, 77, 217)   # 보라: Claude 큐레이션
+        color = discord.Color.from_rgb(108, 77, 217)  # 보라: Claude 큐레이션
     elif is_korean:
-        color = discord.Color.from_rgb(0, 112, 255)    # 파랑: 한국어
+        color = discord.Color.from_rgb(0, 112, 255)  # 파랑: 한국어
     else:
         color = discord.Color.orange()
 
@@ -126,6 +125,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # ─── 이벤트 ───────────────────────────────────────────────────────────────────
 
+
 @bot.event
 async def on_ready():
     db.init_db()
@@ -152,13 +152,14 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 # ─── 스케줄 작업 ──────────────────────────────────────────────────────────────
 
+
 @tasks.loop(time=datetime.time(hour=PREFERENCE_ANALYSIS_HOUR, minute=0, tzinfo=KST))
 async def daily_preference_analysis():
     """새벽 2시: 선호도 심층 분석 → data/preference_profile.json 저장."""
     print("[선호도 분석] 시작…")
     try:
         analysis = await asyncio.to_thread(run_preference_analysis)
-        profile  = await asyncio.to_thread(save_preference_profile, analysis)
+        await asyncio.to_thread(save_preference_profile, analysis)
         print(f"[선호도 분석] 완료 — {analysis['summary']}")
     except Exception as e:
         print(f"[선호도 분석] 오류: {e}")
@@ -175,6 +176,7 @@ async def daily_brief():
 
 # ─── 핵심 리서치+게시 로직 ────────────────────────────────────────────────────
 
+
 async def _research_and_post(
     channel: discord.TextChannel,
     count: int = ARTICLES_PER_POST,
@@ -182,52 +184,31 @@ async def _research_and_post(
 ) -> None:
     """
     Claude 웹 리서치로 기사를 가져와 게시합니다.
-    !more 호출 시 오늘 이미 게시된 URL을 Claude에게 전달해 중복 방지합니다.
+    핵심 로직은 pipeline.run_curation_pipeline()에 위임합니다.
     """
     status_msg = await channel.send("🧠 Claude가 AI 뉴스를 리서치하는 중…")
-    articles_to_post = []
 
     try:
-        # 새벽 2시에 저장된 선호도 프로파일 로드 (없으면 None)
-        pref_profile = load_preference_profile()
-        if pref_profile:
-            print(f"[브리핑] 선호도 프로파일 로드 — {pref_profile.get('summary', '')}")
+        result = await asyncio.to_thread(run_curation_pipeline, count)
 
-        exclude_urls = db.get_todays_posted_urls()
-        raw_articles = await asyncio.to_thread(
-            curator.research,
-            count,
-            exclude_urls,
-            pref_profile or {},
+        if result["error"]:
+            await status_msg.edit(content=f"❌ Claude 큐레이션 실패: {result['error']}")
+            return
+
+        if not result["articles"]:
+            msg = "⚠️ Claude 큐레이션 결과가 없습니다." if result["raw_count"] == 0 else "📭 게시할 새 기사가 없습니다."
+            await status_msg.edit(content=msg)
+            return
+
+        await status_msg.edit(
+            content=f"✅ Claude 큐레이션 완료 — {result['raw_count']}개 선정 ({result['new_count']}개 신규)"
         )
-
-        if raw_articles:
-            new_count = sum(1 for a in raw_articles if db.upsert_article({
-                "url":           a.url,
-                "title":         a.title,
-                "source":        a.source,
-                "description":   a.description,
-                "author":        a.author,
-                "image_url":     "",
-                "published_at":  a.published_at,
-                "platform_score": a.platform_score,
-                "keywords":      a.keywords if isinstance(a.keywords, list) else [],
-            }))
-            await status_msg.edit(
-                content=f"✅ Claude 큐레이션 완료 — {len(raw_articles)}개 선정 ({new_count}개 신규)"
-            )
-            pending = db.get_pending_articles(limit=count + 10)
-            articles_to_post = rank_articles(pending)[:count]
-        else:
-            await status_msg.edit(content="⚠️ Claude 큐레이션 결과가 없습니다.")
 
     except Exception as e:
         await status_msg.edit(content=f"❌ Claude 큐레이션 실패: {e}")
         return
 
-    if not articles_to_post:
-        await channel.send("📭 게시할 새 기사가 없습니다.")
-        return
+    articles_to_post = result["articles"]
 
     # ── 3. 헤더 메시지 ──────────────────────────────────────────────────────
     if is_daily:
@@ -249,18 +230,22 @@ async def _research_and_post(
 
 # ─── 권한 체크 ────────────────────────────────────────────────────────────────
 
+
 def is_admin_or_allowed():
     """관리자이거나 ALLOWED_USER_IDS에 포함된 유저면 통과."""
+
     async def predicate(ctx: commands.Context) -> bool:
         if ctx.author.id in ALLOWED_USER_IDS:
             return True
         if ctx.guild and ctx.author.guild_permissions.administrator:
             return True
         raise commands.MissingPermissions(["administrator"])
+
     return commands.check(predicate)
 
 
 # ─── 명령어 ───────────────────────────────────────────────────────────────────
+
 
 @bot.command(name="more")
 async def cmd_more(ctx: commands.Context, count: int = ARTICLES_PER_POST):
@@ -299,8 +284,7 @@ async def cmd_stats(ctx: commands.Context):
 
     if prefs["sources"]:
         lines = [
-            f"• {s['source']}: **{s['multiplier']:.2f}x**  "
-            f"(👍{s['total_likes']} 👎{s['total_dislikes']})"
+            f"• {s['source']}: **{s['multiplier']:.2f}x**  (👍{s['total_likes']} 👎{s['total_dislikes']})"
             for s in prefs["sources"][:10]
         ]
         embed.add_field(name="소스 선호도 배율", value="\n".join(lines), inline=False)
@@ -322,10 +306,9 @@ async def cmd_analyze(ctx: commands.Context):
     status_msg = await ctx.send("🔍 선호도 분석 중…")
     try:
         analysis = await asyncio.to_thread(run_preference_analysis)
-        profile  = await asyncio.to_thread(save_preference_profile, analysis)
+        profile = await asyncio.to_thread(save_preference_profile, analysis)
 
-        hints   = profile["curation_hints"]
-        tiered  = profile["tiered_profile"]
+        hints = profile["curation_hints"]
 
         embed = discord.Embed(
             title="🧠 선호도 분석 완료",
@@ -366,9 +349,9 @@ async def cmd_reset(ctx: commands.Context):
 @bot.command(name="tokens")
 async def cmd_tokens(ctx: commands.Context):
     """오늘의 토큰 사용량, 5시간 윈도우 비교, 전체 일평균을 표시합니다."""
-    today   = token_tracker.get_today_token_stats()
-    window  = token_tracker.get_window_stats()
-    avg     = token_tracker.get_average_daily_stats()
+    today = token_tracker.get_today_token_stats()
+    window = token_tracker.get_window_stats()
+    avg = token_tracker.get_average_daily_stats()
 
     embed = discord.Embed(title="🔢 Claude 토큰 사용 현황", color=discord.Color.from_rgb(108, 77, 217))
 
@@ -419,18 +402,12 @@ async def cmd_tokens(ctx: commands.Context):
 
     # 호출자별 오늘 내역
     if today["callers"]:
-        lines = [
-            f"• `{c['caller']}`: {c['tokens']:,} tok ({c['calls']}회)"
-            for c in today["callers"][:8]
-        ]
+        lines = [f"• `{c['caller']}`: {c['tokens']:,} tok ({c['calls']}회)" for c in today["callers"][:8]]
         embed.add_field(name="🔍 오늘 호출 내역", value="\n".join(lines), inline=False)
 
     # 최근 7일 일별 사용량
     if avg["recent_daily"]:
-        lines = [
-            f"• {d['day']}: **{d['tokens']:,}** ({d['calls']}회)"
-            for d in avg["recent_daily"][:7]
-        ]
+        lines = [f"• {d['day']}: **{d['tokens']:,}** ({d['calls']}회)" for d in avg["recent_daily"][:7]]
         embed.add_field(name="📈 최근 7일", value="\n".join(lines), inline=False)
 
     embed.set_footer(text="5시간 윈도우 = Anthropic 요금제 롤링 한도 기준")

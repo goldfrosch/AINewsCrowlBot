@@ -1,6 +1,7 @@
 import sys
-from config import DISCORD_BOT_TOKEN
+
 from bot import bot
+from config import DISCORD_BOT_TOKEN
 
 
 def main():

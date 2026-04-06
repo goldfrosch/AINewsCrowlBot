@@ -12,12 +12,13 @@ news_curation_agent.run() 이 이 파일을 읽어 큐레이션 힌트로 활용
   - source_preferences / keywords 는 이벤트별 타임스탬프가 없어
     윈도우 필터 불가 → 전체 누적 배율 참조 용도로만 사용.
 """
+
+import datetime
 import json
 import sqlite3
-import datetime
+import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
-import sys
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -26,6 +27,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import database as db
 
 DB_PATH = Path("data/bot.db")
+
+
+def set_db_path(path: Path | str) -> None:
+    """DB_PATH를 override합니다 (테스트·dry-run용)."""
+    global DB_PATH
+    DB_PATH = Path(path)
+
+
 PREFERENCE_PROFILE_PATH = Path("data/preference_profile.json")
 
 # 점진 확장 윈도우: 7일 → 14일 → 30일 → 전체
@@ -35,6 +44,7 @@ MIN_FEEDBACK = 3
 
 
 # ── 시간 윈도우 기반 데이터 조회 ──────────────────────────────────────────────
+
 
 def get_windowed_feedback(days: int | None) -> dict:
     """지정 기간 내 게시 기사의 소스·키워드별 likes/dislikes를 집계한다."""
@@ -99,22 +109,23 @@ def get_windowed_feedback(days: int | None) -> dict:
             if not kw:
                 continue
             entry = kw_map.setdefault(kw, {"keyword": kw, "likes": 0, "dislikes": 0})
-            entry["likes"]    += row["likes"]
+            entry["likes"] += row["likes"]
             entry["dislikes"] += row["dislikes"]
 
     by_keyword = sorted(kw_map.values(), key=lambda x: x["likes"], reverse=True)
 
     return {
-        "days":                         days,
+        "days": days,
         "total_articles_with_feedback": total,
-        "by_source":                    [dict(r) for r in by_source],
-        "by_keyword":                   by_keyword,
-        "most_liked_titles":            [r["title"] for r in liked_titles],
-        "most_disliked_titles":         [r["title"] for r in disliked_titles],
+        "by_source": [dict(r) for r in by_source],
+        "by_keyword": by_keyword,
+        "most_liked_titles": [r["title"] for r in liked_titles],
+        "most_disliked_titles": [r["title"] for r in disliked_titles],
     }
 
 
 # ── 점진적 윈도우 확장 ────────────────────────────────────────────────────────
+
 
 def find_sufficient_window(
     min_articles: int = MIN_ARTICLES_WITH_FEEDBACK,
@@ -124,8 +135,7 @@ def find_sufficient_window(
         data = get_windowed_feedback(days)
         if data["total_articles_with_feedback"] >= min_articles:
             label = f"{days}일" if days else "전체 기간"
-            print(f"[PreferenceAnalysis] 윈도우: {label} "
-                  f"(피드백 기사 {data['total_articles_with_feedback']}개)")
+            print(f"[PreferenceAnalysis] 윈도우: {label} (피드백 기사 {data['total_articles_with_feedback']}개)")
             return data, days
 
     fallback = get_windowed_feedback(None)
@@ -140,11 +150,9 @@ def describe_window(days: int | None) -> str:
 
 # ── 신뢰도 필터링 & 티어 분류 ─────────────────────────────────────────────────
 
+
 def filter_reliable(items: list[dict], min_feedback: int = MIN_FEEDBACK) -> list[dict]:
-    return [
-        item for item in items
-        if item["likes"] + item["dislikes"] >= min_feedback
-    ]
+    return [item for item in items if item["likes"] + item["dislikes"] >= min_feedback]
 
 
 def _ratio_to_tier(likes: int, dislikes: int) -> str:
@@ -153,19 +161,23 @@ def _ratio_to_tier(likes: int, dislikes: int) -> str:
     if total == 0:
         return "중립"
     ratio = likes / total
-    if ratio >= 0.8:   return "강선호"
-    if ratio >= 0.6:   return "선호"
-    if ratio >= 0.4:   return "중립"
-    if ratio >= 0.2:   return "비선호"
+    if ratio >= 0.8:
+        return "강선호"
+    if ratio >= 0.6:
+        return "선호"
+    if ratio >= 0.4:
+        return "중립"
+    if ratio >= 0.2:
+        return "비선호"
     return "강비선호"
 
 
 def build_tiered_profile(windowed: dict, min_feedback: int = MIN_FEEDBACK) -> dict:
-    reliable_sources  = filter_reliable(windowed["by_source"],  min_feedback)
+    reliable_sources = filter_reliable(windowed["by_source"], min_feedback)
     reliable_keywords = filter_reliable(windowed["by_keyword"], min_feedback)
 
     src_tiers = {"강선호": [], "선호": [], "중립": [], "비선호": [], "강비선호": []}
-    kw_tiers  = {"강선호": [], "선호": [], "중립": [], "비선호": [], "강비선호": []}
+    kw_tiers = {"강선호": [], "선호": [], "중립": [], "비선호": [], "강비선호": []}
 
     for s in reliable_sources:
         src_tiers[_ratio_to_tier(s["likes"], s["dislikes"])].append(s["source"])
@@ -173,14 +185,15 @@ def build_tiered_profile(windowed: dict, min_feedback: int = MIN_FEEDBACK) -> di
         kw_tiers[_ratio_to_tier(k["likes"], k["dislikes"])].append(k["keyword"])
 
     return {
-        "sources":                src_tiers,
-        "keywords":               kw_tiers,
-        "reliable_source_count":  len(reliable_sources),
+        "sources": src_tiers,
+        "keywords": kw_tiers,
+        "reliable_source_count": len(reliable_sources),
         "reliable_keyword_count": len(reliable_keywords),
     }
 
 
 # ── 큐레이션 힌트 생성 ────────────────────────────────────────────────────────
+
 
 def build_curation_hints(
     tiered: dict,
@@ -202,17 +215,18 @@ def build_curation_hints(
     avoid_sources = (tiered["sources"]["강비선호"] + tiered["sources"]["비선호"])[:5]
 
     return {
-        "boost_sources":  boost_sources,
-        "avoid_sources":  avoid_sources,
+        "boost_sources": boost_sources,
+        "avoid_sources": avoid_sources,
         "focus_keywords": tiered["keywords"]["강선호"][:10],
-        "skip_keywords":  tiered["keywords"]["강비선호"][:10],
-        "cold_start":     cold_start,
-        "confidence":     confidence,
-        "data_window":    describe_window(windowed["days"]),
+        "skip_keywords": tiered["keywords"]["강비선호"][:10],
+        "cold_start": cold_start,
+        "confidence": confidence,
+        "data_window": describe_window(windowed["days"]),
     }
 
 
 # ── 전체 분석 파이프라인 ──────────────────────────────────────────────────────
+
 
 def run_preference_analysis(
     min_articles: int = MIN_ARTICLES_WITH_FEEDBACK,
@@ -237,7 +251,7 @@ def run_preference_analysis(
     total_agg = sum(s["total_likes"] + s["total_dislikes"] for s in agg_prefs["sources"])
 
     tiered = build_tiered_profile(windowed, min_feedback)
-    hints  = build_curation_hints(tiered, windowed, total_agg)
+    hints = build_curation_hints(tiered, windowed, total_agg)
 
     data_window = describe_window(used_days)
     summary = (
@@ -248,26 +262,27 @@ def run_preference_analysis(
     )
 
     return {
-        "windowed":       windowed,
+        "windowed": windowed,
         "tiered_profile": tiered,
         "curation_hints": hints,
         "total_feedback": total_agg,
-        "data_window":    data_window,
-        "summary":        summary,
+        "data_window": data_window,
+        "summary": summary,
     }
 
 
 # ── 저장 / 로드 ───────────────────────────────────────────────────────────────
 
+
 def save_preference_profile(analysis: dict) -> dict:
     """분석 결과를 data/preference_profile.json 에 저장하고 프로파일 dict를 반환한다."""
     profile = {
-        "generated_at":   datetime.datetime.now(tz=KST).isoformat(),
+        "generated_at": datetime.datetime.now(tz=KST).isoformat(),
         "curation_hints": analysis["curation_hints"],
         "tiered_profile": analysis["tiered_profile"],
         "total_feedback": analysis["total_feedback"],
-        "data_window":    analysis["data_window"],
-        "summary":        analysis["summary"],
+        "data_window": analysis["data_window"],
+        "summary": analysis["summary"],
     }
     PREFERENCE_PROFILE_PATH.parent.mkdir(exist_ok=True)
     PREFERENCE_PROFILE_PATH.write_text(
@@ -294,7 +309,7 @@ def load_preference_profile() -> dict | None:
 if __name__ == "__main__":
     db.init_db()
     analysis = run_preference_analysis()
-    profile  = save_preference_profile(analysis)
+    profile = save_preference_profile(analysis)
 
     print("\n" + "=" * 60)
     print(analysis["summary"])

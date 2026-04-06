@@ -1,0 +1,44 @@
+[project]
+name = "ainews-crawl-bot"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+    "T20", # flake8-print
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",   # line too long (formatter handles it)
+    "T201",   # print statements (acceptable in bot scripts)
+    "RUF001", # ambiguous unicode chars in strings (intentional in prompts)
+    "RUF002", # ambiguous unicode chars in docstrings (intentional: math symbols ×)
+    "RUF003", # ambiguous unicode chars in comments
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agents", "crawlers"]
+
+[tool.ruff.lint.per-file-ignores]
+"agents/*" = ["E402"]       # sys.path.insert before local imports
+"dry_run.py" = ["E402"]    # load_dotenv before local imports
+"tests/*" = ["E402", "B011"]  # pytest allows assert, late imports
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.vulture]
+min_confidence = 80
+exclude = ["tests/"]

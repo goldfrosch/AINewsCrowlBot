@@ -8,6 +8,7 @@
 - source_multiplier: 👍/👎 누적 기반, 기본 1.0 (범위 0.1~5.0)
 - keyword_multiplier: AI 태깅 키워드가 우선, 없으면 제목/설명에서 추출
 """
+
 import json
 
 import database as db
@@ -15,21 +16,81 @@ from config import AI_KEYWORDS
 
 # 소스별 점수 정규화 상한선 (이 값을 100%로 봄)
 _SCORE_CAP: dict[str, float] = {
-    "HackerNews":   1_500.0,
-    "YouTube":      5_000_000.0,
-    "default":      50_000.0,
+    "HackerNews": 1_500.0,
+    "YouTube": 5_000_000.0,
+    "default": 50_000.0,
 }
 
 # 불용어 (키워드 추출 시 제외)
 _STOPWORDS = {
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "this", "that", "it", "not", "use", "new", "can", "also",
-    "how", "what", "why", "when", "where", "which", "who", "all", "just",
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "but",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "with",
+    "by",
+    "from",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "this",
+    "that",
+    "it",
+    "not",
+    "use",
+    "new",
+    "can",
+    "also",
+    "how",
+    "what",
+    "why",
+    "when",
+    "where",
+    "which",
+    "who",
+    "all",
+    "just",
     # 한국어 빈출 조사/어미 (단순 토크나이저 보완)
-    "의", "을", "를", "이", "가", "은", "는", "에", "에서", "로", "으로",
-    "와", "과", "도", "만", "서", "한", "및", "등",
+    "의",
+    "을",
+    "를",
+    "이",
+    "가",
+    "은",
+    "는",
+    "에",
+    "에서",
+    "로",
+    "으로",
+    "와",
+    "과",
+    "도",
+    "만",
+    "서",
+    "한",
+    "및",
+    "등",
 }
 
 
@@ -63,14 +124,12 @@ def _get_article_keywords(article: dict) -> list[str]:
     인메모리 Article 객체도 list이므로 JSON 파싱은 폴백으로만 사용."""
     stored = article.get("keywords", [])
     if isinstance(stored, list):
-        return stored if stored else extract_keywords(
-            article.get("title", "") + " " + article.get("description", "")
-        )
+        return stored if stored else extract_keywords(article.get("title", "") + " " + article.get("description", ""))
     if isinstance(stored, str):
         try:
             parsed = json.loads(stored)
-            return parsed if parsed else extract_keywords(
-                article.get("title", "") + " " + article.get("description", "")
+            return (
+                parsed if parsed else extract_keywords(article.get("title", "") + " " + article.get("description", ""))
             )
         except (json.JSONDecodeError, TypeError):
             pass
@@ -91,10 +150,7 @@ def rank_articles(articles: list[dict]) -> list[dict]:
         src_m = source_mult.get(a.get("source", ""), 1.0)
 
         kws = _get_article_keywords(a)
-        kw_m = (
-            sum(keyword_mult.get(kw, 1.0) for kw in kws) / len(kws)
-            if kws else 1.0
-        )
+        kw_m = sum(keyword_mult.get(kw, 1.0) for kw in kws) / len(kws) if kws else 1.0
 
         a["final_score"] = round(base * src_m * kw_m, 6)
 

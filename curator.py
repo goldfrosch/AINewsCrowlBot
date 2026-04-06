@@ -6,13 +6,15 @@ Claude 기반 AI 뉴스 큐레이션 엔진
        analyze_preferences → find_ai_articles (토픽별) → review_articles
   2. 실패 시 단순 웹 검색 1회 폴백
 """
+
 import json
 import time
+
 import anthropic
 
-from crawlers.base import Article
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 import token_tracker
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from crawlers.base import Article
 
 # ─── 시스템 프롬프트 (폴백용) ──────────────────────────────────────────────────
 
@@ -35,58 +37,78 @@ Rules:
 
 # ─── 유틸리티 ────────────────────────────────────────────────────────────────
 
+
 def _extract_json_array(text: str) -> list[dict]:
-    """응답 텍스트에서 마지막 JSON 배열을 추출합니다."""
-    start = text.rfind("[")
-    if start == -1:
-        return []
+    """응답 텍스트에서 바깥 JSON 배열을 추출합니다.
 
-    depth = 0
-    end = -1
-    for i, ch in enumerate(text[start:], start):
-        if ch == "[":
-            depth += 1
-        elif ch == "]":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
+    find("[")로 첫 번째 '['부터 브래킷 매칭하여 바깥 배열을 추출합니다.
+    추출 결과가 list[dict]가 아니면 다음 '[' 위치로 이동해 재시도합니다.
+    """
+    pos = 0
+    while True:
+        start = text.find("[", pos)
+        if start == -1:
+            return []
 
-    if end == -1:
-        return []
+        depth = 0
+        end = -1
+        for i, ch in enumerate(text[start:], start):
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
 
-    try:
-        return json.loads(text[start:end])
-    except json.JSONDecodeError:
-        return []
+        if end == -1:
+            pos = start + 1
+            continue
+
+        try:
+            result = json.loads(text[start:end])
+            if isinstance(result, list) and (not result or isinstance(result[0], dict)):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+        pos = start + 1
 
 
 def _to_articles(data: list[dict]) -> list[Article]:
     articles = []
     for item in data:
-        url = item.get("url", "").strip()
-        title = item.get("title", "").strip()
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        title = str(item.get("title") or "").strip()
         if not url or not title:
             continue
 
-        desc = item.get("description", "")
-        reason = item.get("curator_reason", "")
+        desc = str(item.get("description") or "")
+        reason = str(item.get("curator_reason") or "")
         full_desc = f"{desc}\n\n💡 **선정 이유**: {reason}" if reason else desc
 
-        articles.append(Article(
-            url=url,
-            title=title,
-            source=item.get("source", "AI Research"),
-            description=full_desc[:500],
-            author=item.get("author", ""),
-            published_at=item.get("published_at", ""),
-            platform_score=100.0,
-            keywords=item.get("keywords", []),
-        ))
+        raw_kw = item.get("keywords")
+        keywords = raw_kw if isinstance(raw_kw, list) else []
+
+        articles.append(
+            Article(
+                url=url,
+                title=title,
+                source=str(item.get("source") or "AI Research"),
+                description=full_desc[:500],
+                author=str(item.get("author") or ""),
+                published_at=str(item.get("published_at") or ""),
+                platform_score=100.0,
+                keywords=keywords,
+            )
+        )
     return articles
 
 
 # ─── 폴백: 단순 웹 검색 1회 ──────────────────────────────────────────────────
+
 
 def _fallback_research(
     count: int,
@@ -186,6 +208,7 @@ def _fallback_research(
 
 # ─── 공개 API ─────────────────────────────────────────────────────────────────
 
+
 def research(
     count: int,
     exclude_urls: list[str] | None = None,
@@ -207,6 +230,7 @@ def research(
         raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
 
     from agents.news_curation_agent import run as _agent_run
+
     try:
         raw = _agent_run(target_count=count, external_preferences=preferences or {})
         if raw:

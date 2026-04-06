@@ -6,11 +6,18 @@
 - 5시간 윈도우 기준 사용량 집계 (Anthropic 요금제 한도 윈도우)
 - 일별 통계 및 전체 평균 제공
 """
+
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
 TOKEN_DB_PATH = Path("data/token_usage.db")
+
+
+def set_token_db_path(path: Path | str) -> None:
+    """TOKEN_DB_PATH를 override합니다 (테스트·dry-run용)."""
+    global TOKEN_DB_PATH
+    TOKEN_DB_PATH = Path(path)
 
 
 @contextmanager
@@ -98,12 +105,12 @@ def get_today_token_stats() -> dict:
         ).fetchall()
 
     return {
-        "call_count":   summary["call_count"],
-        "total_input":  summary["total_input"],
+        "call_count": summary["call_count"],
+        "total_input": summary["total_input"],
         "total_output": summary["total_output"],
         "total_tokens": summary["total_tokens"],
         "avg_per_call": round(summary["avg_per_call"]),
-        "callers":      [dict(c) for c in callers],
+        "callers": [dict(c) for c in callers],
     }
 
 
@@ -140,11 +147,11 @@ def get_average_daily_stats() -> dict:
         ).fetchall()
 
     return {
-        "total_days":    row["total_days"],
-        "grand_total":   row["grand_total"],
-        "avg_per_call":  round(row["avg_per_call"]),
-        "avg_per_day":   round(row["avg_per_day"]),
-        "recent_daily":  [dict(d) for d in daily],
+        "total_days": row["total_days"],
+        "grand_total": row["grand_total"],
+        "avg_per_call": round(row["avg_per_call"]),
+        "avg_per_day": round(row["avg_per_day"]),
+        "recent_daily": [dict(d) for d in daily],
     }
 
 
@@ -178,18 +185,15 @@ def get_window_stats() -> dict:
             """
         ).fetchone()
 
-    cur_tok  = current["tokens"]
+    cur_tok = current["tokens"]
     prev_tok = previous["tokens"]
 
-    if prev_tok > 0:
-        pct_change = round((cur_tok - prev_tok) / prev_tok * 100, 1)
-    else:
-        pct_change = None
+    pct_change = round((cur_tok - prev_tok) / prev_tok * 100, 1) if prev_tok > 0 else None
 
     return {
-        "current_calls":  current["calls"],
+        "current_calls": current["calls"],
         "current_tokens": cur_tok,
-        "prev_calls":     previous["calls"],
-        "prev_tokens":    prev_tok,
-        "pct_change":     pct_change,
+        "prev_calls": previous["calls"],
+        "prev_tokens": prev_tok,
+        "pct_change": pct_change,
     }

@@ -5,18 +5,25 @@ SQLite 데이터베이스 관리
 - article_keywords: 기사-키워드 다대다 연결 테이블
 - source_preferences: 소스별 👍/👎 기반 선호도 배율
 """
-import sqlite3
+
 import json
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
 
 DB_PATH = Path("data/bot.db")
 
+
+def set_db_path(path: Path | str) -> None:
+    """DB_PATH를 override합니다 (테스트·dry-run용)."""
+    global DB_PATH
+    DB_PATH = Path(path)
+
+
 PREFERENCE_MIN = 0.1
 PREFERENCE_MAX = 5.0
-SOURCE_DELTA = 0.15    # 👍/👎 시 소스 배율 변화량
-KEYWORD_DELTA = 0.05   # 👍/👎 시 키워드 배율 변화량
+SOURCE_DELTA = 0.15  # 👍/👎 시 소스 배율 변화량
+KEYWORD_DELTA = 0.05  # 👍/👎 시 키워드 배율 변화량
 
 
 @contextmanager
@@ -86,9 +93,7 @@ def init_db() -> None:
 
 def _migrate(conn) -> None:
     """기존 DB 구조(keyword_preferences, articles.keywords)를 새 스키마로 마이그레이션."""
-    tables = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()}
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     cols = {r[1] for r in conn.execute("PRAGMA table_info(articles)").fetchall()}
 
     # keyword_preferences → keywords 테이블로 이전
@@ -114,21 +119,18 @@ def _migrate(conn) -> None:
             for kw in kws:
                 if not kw:
                     continue
-                conn.execute(
-                    "INSERT OR IGNORE INTO keywords (keyword) VALUES (?)", (kw,)
-                )
-                kw_row = conn.execute(
-                    "SELECT id FROM keywords WHERE keyword = ?", (kw,)
-                ).fetchone()
+                conn.execute("INSERT OR IGNORE INTO keywords (keyword) VALUES (?)", (kw,))
+                kw_row = conn.execute("SELECT id FROM keywords WHERE keyword = ?", (kw,)).fetchone()
                 if kw_row:
                     conn.execute(
                         "INSERT OR IGNORE INTO article_keywords (article_id, keyword_id) VALUES (?, ?)",
-                        (article_id, kw_row[0])
+                        (article_id, kw_row[0]),
                     )
         conn.execute("ALTER TABLE articles DROP COLUMN keywords")
 
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────────
+
 
 def _rows_with_keywords(rows) -> list[dict]:
     """SELECT 결과에서 _kw_list 컬럼을 keywords 리스트로 변환."""
@@ -148,21 +150,19 @@ def _link_keywords(conn, article_id: int, keywords) -> None:
             keywords = json.loads(keywords)
         except (json.JSONDecodeError, TypeError):
             keywords = []
-    for kw in (keywords or []):
+    for kw in keywords or []:
         if not kw:
             continue
         conn.execute("INSERT OR IGNORE INTO keywords (keyword) VALUES (?)", (kw,))
-        kw_row = conn.execute(
-            "SELECT id FROM keywords WHERE keyword = ?", (kw,)
-        ).fetchone()
+        kw_row = conn.execute("SELECT id FROM keywords WHERE keyword = ?", (kw,)).fetchone()
         if kw_row:
             conn.execute(
-                "INSERT OR IGNORE INTO article_keywords (article_id, keyword_id) VALUES (?, ?)",
-                (article_id, kw_row[0])
+                "INSERT OR IGNORE INTO article_keywords (article_id, keyword_id) VALUES (?, ?)", (article_id, kw_row[0])
             )
 
 
 # ── 기사 관련 ─────────────────────────────────────────────────────────────────
+
 
 def upsert_article(article: dict) -> bool:
     """새 기사를 저장. 중복 URL이면 False 반환.
@@ -221,7 +221,7 @@ def mark_as_posted(article_id: int, message_id: str, channel_id: str) -> None:
         )
 
 
-def get_article_by_message_id(message_id: str) -> Optional[dict]:
+def get_article_by_message_id(message_id: str) -> dict | None:
     with _db() as conn:
         rows = conn.execute(
             """
@@ -259,6 +259,7 @@ def update_final_scores(articles: list[dict]) -> None:
 
 # ── 선호도 관련 ───────────────────────────────────────────────────────────────
 
+
 def _clamp(value: float) -> float:
     return max(PREFERENCE_MIN, min(PREFERENCE_MAX, value))
 
@@ -283,7 +284,9 @@ def update_source_preference(source: str, liked: bool) -> None:
                 _clamp(1.0 + delta),
                 likes_inc,
                 dislikes_inc,
-                PREFERENCE_MIN, PREFERENCE_MAX, delta,
+                PREFERENCE_MIN,
+                PREFERENCE_MAX,
+                delta,
                 likes_inc,
                 dislikes_inc,
             ),
@@ -310,7 +313,9 @@ def update_keyword_preference(keyword: str, liked: bool) -> None:
                 _clamp(1.0 + delta),
                 likes_inc,
                 dislikes_inc,
-                PREFERENCE_MIN, PREFERENCE_MAX, delta,
+                PREFERENCE_MIN,
+                PREFERENCE_MAX,
+                delta,
                 likes_inc,
                 dislikes_inc,
             ),
@@ -365,18 +370,10 @@ def get_todays_posted_urls() -> list[str]:
 def get_stats() -> dict:
     with _db() as conn:
         total = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
-        posted = conn.execute(
-            "SELECT COUNT(*) FROM articles WHERE status = 'posted'"
-        ).fetchone()[0]
-        pending = conn.execute(
-            "SELECT COUNT(*) FROM articles WHERE status = 'pending'"
-        ).fetchone()[0]
-        total_likes = conn.execute(
-            "SELECT COALESCE(SUM(likes), 0) FROM articles"
-        ).fetchone()[0]
-        total_dislikes = conn.execute(
-            "SELECT COALESCE(SUM(dislikes), 0) FROM articles"
-        ).fetchone()[0]
+        posted = conn.execute("SELECT COUNT(*) FROM articles WHERE status = 'posted'").fetchone()[0]
+        pending = conn.execute("SELECT COUNT(*) FROM articles WHERE status = 'pending'").fetchone()[0]
+        total_likes = conn.execute("SELECT COALESCE(SUM(likes), 0) FROM articles").fetchone()[0]
+        total_dislikes = conn.execute("SELECT COALESCE(SUM(dislikes), 0) FROM articles").fetchone()[0]
     return {
         "total": total,
         "posted": posted,

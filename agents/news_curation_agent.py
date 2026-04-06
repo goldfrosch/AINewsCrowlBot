@@ -23,9 +23,10 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import anthropic
+
 import database as db
 import token_tracker
-from config import ANTHROPIC_API_KEY, AI_KEYWORDS, CLAUDE_MODEL
+from config import AI_KEYWORDS, ANTHROPIC_API_KEY, CLAUDE_MODEL
 
 _SYSTEM_RESEARCH = """\
 You are a focused researcher finding high-quality articles for developers who build and operate AI systems.
@@ -66,11 +67,12 @@ def _extract_json_array(text: str) -> list[dict]:
     except json.JSONDecodeError:
         return []
 
+
 # ── 문서 로더 ─────────────────────────────────────────────────────────────────
 
-_CLAUDE_DIR    = Path(__file__).resolve().parent.parent / ".claude"
+_CLAUDE_DIR = Path(__file__).resolve().parent.parent / ".claude"
 _AGENT_DOC_PATH = _CLAUDE_DIR / "agents" / "news-curation-agent.md"
-_SKILLS_DIR    = _CLAUDE_DIR / "skills"
+_SKILLS_DIR = _CLAUDE_DIR / "skills"
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -94,9 +96,9 @@ def _load_agent_spec() -> dict:
         raise ValueError(f"에이전트 문서 형식 오류: {_AGENT_DOC_PATH}")
     frontmatter = yaml.safe_load(match.group(1))
     return {
-        "topics":                   frontmatter.get("topics", {}),
-        "default_topics":           frontmatter.get("default_topics", []),
-        "system_prompt_template":   match.group(2).strip(),
+        "topics": frontmatter.get("topics", {}),
+        "default_topics": frontmatter.get("default_topics", []),
+        "system_prompt_template": match.group(2).strip(),
     }
 
 
@@ -113,12 +115,12 @@ def _load_skill(name: str) -> str:
 
 # ── 에이전트·스킬 문서에서 상수 로드 ─────────────────────────────────────────
 
-_AGENT_SPEC    = _load_agent_spec()
+_AGENT_SPEC = _load_agent_spec()
 _TOPIC_DESC: dict[str, str] = _AGENT_SPEC["topics"]
-_DEFAULT_TOPICS: list[str]  = _AGENT_SPEC["default_topics"]
+_DEFAULT_TOPICS: list[str] = _AGENT_SPEC["default_topics"]
 
 # 각 sub-agent 호출에 주입할 skill 본문 (모듈 로드 시 1회만 읽음)
-_SKILL_FINDER:   str = _load_skill("article-finder")
+_SKILL_FINDER: str = _load_skill("article-finder")
 _SKILL_REVIEWER: str = _load_skill("article-reviewer")
 
 _SPAM_RE = re.compile(
@@ -129,22 +131,21 @@ _SPAM_RE = re.compile(
 
 # ── 도구 구현 ─────────────────────────────────────────────────────────────────
 
+
 def _tool_analyze_preferences() -> dict:
     """DB에서 선호도 데이터를 읽어 요약 딕셔너리를 반환한다."""
     prefs = db.get_all_preferences()
 
-    liked_sources    = [s for s in prefs["sources"]  if s["multiplier"] > 1.1][:5]
-    disliked_sources = [s for s in prefs["sources"]  if s["multiplier"] < 0.9][:5]
-    liked_keywords   = [k for k in prefs["keywords"] if k["multiplier"] > 1.1][:10]
-    total_feedback   = sum(
-        s["total_likes"] + s["total_dislikes"] for s in prefs["sources"]
-    )
+    liked_sources = [s for s in prefs["sources"] if s["multiplier"] > 1.1][:5]
+    disliked_sources = [s for s in prefs["sources"] if s["multiplier"] < 0.9][:5]
+    liked_keywords = [k for k in prefs["keywords"] if k["multiplier"] > 1.1][:10]
+    total_feedback = sum(s["total_likes"] + s["total_dislikes"] for s in prefs["sources"])
 
     return {
-        "liked_sources":    [s["source"]  for s in liked_sources],
-        "disliked_sources": [s["source"]  for s in disliked_sources],
-        "liked_keywords":   [k["keyword"] for k in liked_keywords],
-        "total_feedback":   total_feedback,
+        "liked_sources": [s["source"] for s in liked_sources],
+        "disliked_sources": [s["source"] for s in disliked_sources],
+        "liked_keywords": [k["keyword"] for k in liked_keywords],
+        "total_feedback": total_feedback,
         "summary": (
             f"피드백 누적 {total_feedback}건 | "
             f"선호 소스 {len(liked_sources)}개, 비선호 소스 {len(disliked_sources)}개, "
@@ -244,23 +245,23 @@ def _tool_find_ai_articles(
     # 필드 정규화
     cleaned = [
         {
-            "url":            a.get("url", "").strip(),
-            "title":          a.get("title", "제목 없음"),
-            "source":         a.get("source", "Unknown"),
-            "description":    a.get("description", "")[:500],
-            "published_at":   a.get("published_at", ""),
+            "url": a.get("url", "").strip(),
+            "title": a.get("title", "제목 없음"),
+            "source": a.get("source", "Unknown"),
+            "description": a.get("description", "")[:500],
+            "published_at": a.get("published_at", ""),
             "curator_reason": a.get("curator_reason", ""),
-            "keywords":       a.get("keywords", []),
+            "keywords": a.get("keywords", []),
         }
         for a in raw_articles
         if a.get("url") and a.get("title")
     ]
 
     return {
-        "topic":    topic,
+        "topic": topic,
         "articles": cleaned,
-        "count":    len(cleaned),
-        "message":  f"'{topic}' 토픽에서 {len(cleaned)}개 기사 수집",
+        "count": len(cleaned),
+        "message": f"'{topic}' 토픽에서 {len(cleaned)}개 기사 수집",
     }
 
 
@@ -293,14 +294,14 @@ def _tool_review_articles(
 
     if len(deduped) <= target_count:
         return {
-            "kept":    deduped,
+            "kept": deduped,
             "summary": f"필터 후 {len(deduped)}개 (Claude 검토 생략)",
         }
 
     # 2. Claude 심층 검토
-    liked    = ", ".join(preferences.get("liked_sources",   [])) or "없음"
+    liked = ", ".join(preferences.get("liked_sources", [])) or "없음"
     disliked = ", ".join(preferences.get("disliked_sources", [])) or "없음"
-    keywords = ", ".join(preferences.get("liked_keywords",  [])) or "없음"
+    keywords = ", ".join(preferences.get("liked_keywords", [])) or "없음"
 
     prompt = f"""Review these AI news articles for a daily Discord briefing.
 
@@ -350,7 +351,7 @@ Output ONLY a JSON array (preserve all fields, improve curator_reason if weak, a
                 kept = _extract_json_array(block.text)
                 if kept:
                     return {
-                        "kept":    kept[:target_count],
+                        "kept": kept[:target_count],
                         "summary": f"Claude 검토 완료: {len(deduped)}개 → {len(kept[:target_count])}개 선별",
                     }
     except anthropic.RateLimitError:
@@ -359,7 +360,7 @@ Output ONLY a JSON array (preserve all fields, improve curator_reason if weak, a
         print(f"[Reviewer] Claude 검토 오류: {e}")
 
     return {
-        "kept":    deduped[:target_count],
+        "kept": deduped[:target_count],
         "summary": f"규칙 필터만 적용: {len(deduped[:target_count])}개 반환",
     }
 
@@ -383,8 +384,7 @@ _TOOLS = [
     {
         "name": "find_ai_articles",
         "description": (
-            "지정 토픽의 최신 AI 기사를 웹 검색으로 수집한다. "
-            "토픽별로 여러 번 호출해 다양한 기사를 모은다."
+            "지정 토픽의 최신 AI 기사를 웹 검색으로 수집한다. 토픽별로 여러 번 호출해 다양한 기사를 모은다."
         ),
         "input_schema": {
             "type": "object",
@@ -441,6 +441,7 @@ _TOOLS = [
 
 # ── 에이전트 메인 루프 ─────────────────────────────────────────────────────────
 
+
 def run(
     target_count: int = 5,
     topics: list[str] | None = None,
@@ -463,11 +464,18 @@ def run(
 
     topics = topics or _DEFAULT_TOPICS
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    collected: set[str] = set()   # 이미 수집한 URL 추적
+    collected: set[str] = set()  # 이미 수집한 URL 추적
 
-    system_prompt = _AGENT_SPEC["system_prompt_template"].format(
-        target_count=target_count,
-        topics_list=", ".join(topics),
+    system_prompt = (
+        _AGENT_SPEC["system_prompt_template"]
+        .replace(
+            "{target_count}",
+            str(target_count),
+        )
+        .replace(
+            "{topics_list}",
+            ", ".join(topics),
+        )
     )
 
     # external_preferences가 있으면 에이전트 user 메시지에 힌트를 포함한다
@@ -475,11 +483,11 @@ def run(
     if external_preferences:
         hints = external_preferences.get("curation_hints", {})
         if hints and not hints.get("cold_start"):
-            boost  = ", ".join(hints.get("boost_sources",  [])[:5]) or "없음"
-            avoid  = ", ".join(hints.get("avoid_sources",  [])[:5]) or "없음"
-            focus  = ", ".join(hints.get("focus_keywords", [])[:8]) or "없음"
+            boost = ", ".join(hints.get("boost_sources", [])[:5]) or "없음"
+            avoid = ", ".join(hints.get("avoid_sources", [])[:5]) or "없음"
+            focus = ", ".join(hints.get("focus_keywords", [])[:8]) or "없음"
             window = hints.get("data_window", "")
-            conf   = hints.get("confidence", "")
+            conf = hints.get("confidence", "")
             hints_text = (
                 f"\n\n[사전 분석된 선호도 프로파일 — {window}, 신뢰도: {conf}]\n"
                 f"• 선호 소스: {boost}\n"
@@ -494,8 +502,7 @@ def run(
             "content": (
                 f"AI 뉴스를 큐레이션해주세요. "
                 f"탐색 토픽: {', '.join(topics)}. "
-                f"최종 {target_count}개 기사를 선별해 JSON 배열로 반환하세요."
-                + hints_text
+                f"최종 {target_count}개 기사를 선별해 JSON 배열로 반환하세요." + hints_text
             ),
         }
     ]
@@ -547,8 +554,8 @@ def run(
             if not hasattr(block, "type") or block.type != "tool_use":
                 continue
 
-            name  = block.name
-            inp   = block.input
+            name = block.name
+            inp = block.input
             print(f"[Agent] 도구 호출: {name}", end="")
 
             if name == "analyze_preferences":
@@ -557,9 +564,9 @@ def run(
                 if external_preferences:
                     hints = external_preferences.get("curation_hints", {})
                     if hints:
-                        result["liked_sources"]    = hints.get("boost_sources",  result["liked_sources"])
-                        result["disliked_sources"]  = hints.get("avoid_sources",   result["disliked_sources"])
-                        result["liked_keywords"]    = hints.get("focus_keywords",  result["liked_keywords"])
+                        result["liked_sources"] = hints.get("boost_sources", result["liked_sources"])
+                        result["disliked_sources"] = hints.get("avoid_sources", result["disliked_sources"])
+                        result["liked_keywords"] = hints.get("focus_keywords", result["liked_keywords"])
                         result["summary"] += f" [외부 프로파일 적용: {hints.get('data_window', '')}]"
                 preferences = result
                 print(f" → {result['summary']}")
@@ -577,8 +584,8 @@ def run(
 
             elif name == "review_articles":
                 articles_in = inp.get("articles", all_found)
-                pref_in     = inp.get("preferences", preferences)
-                t_count     = int(inp.get("target_count", target_count))
+                pref_in = inp.get("preferences", preferences)
+                t_count = int(inp.get("target_count", target_count))
                 result = _tool_review_articles(client, articles_in, pref_in, t_count)
                 print(f" → {result['summary']}")
 
@@ -586,11 +593,13 @@ def run(
                 result = {"error": f"알 수 없는 도구: {name}"}
                 print(f" → 오류: {result['error']}")
 
-            tool_results.append({
-                "type":        "tool_result",
-                "tool_use_id": block.id,
-                "content":     json.dumps(result, ensure_ascii=False),
-            })
+            tool_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result, ensure_ascii=False),
+                }
+            )
 
         messages.append({"role": "user", "content": tool_results})
 
@@ -599,14 +608,19 @@ def run(
 
 # ── CLI 진입점 ────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI 뉴스 큐레이션 에이전트")
     parser.add_argument(
-        "--count", type=int, default=5,
+        "--count",
+        type=int,
+        default=5,
         help="선별할 기사 수 (기본: 5)",
     )
     parser.add_argument(
-        "--topics", type=str, default="",
+        "--topics",
+        type=str,
+        default="",
         help="탐색 토픽 콤마 구분 (기본: models,company_news,arxiv_papers,dev_tools,korean_news)",
     )
     args = parser.parse_args()
