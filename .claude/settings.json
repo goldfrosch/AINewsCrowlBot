@@ -1,5 +1,18 @@
 {
   "enabledPlugins": {
     "claude-beginner-harness-plugin@beginner-harness": true
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "(Write|Edit|NotebookEdit)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ruff check --fix . 2>&1 && ruff format . 2>&1 && vulture . --min-confidence 80 2>&1"
+          }
+        ]
+      }
+    ]
   }
 }
