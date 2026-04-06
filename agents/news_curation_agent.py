@@ -217,7 +217,7 @@ def _tool_find_ai_articles(
                     raw_articles = data
                     break
     except anthropic.RateLimitError:
-        print(f"[FindArticles] ({topic}): RateLimit — 30초 대기 후 재시도")
+        print(f"[FindArticles] ({topics}): RateLimit — 30초 대기 후 재시도")
         time.sleep(30)
         try:
             _t0 = time.perf_counter()
