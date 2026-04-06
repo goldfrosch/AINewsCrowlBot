@@ -11,7 +11,6 @@
 - **Claude 웹 리서치** — `web_search_20260209` tool-use로 최신 기사를 실시간 탐색
 - **선호도 학습** — 👍/👎 반응 누적 → 소스·키워드 배율 자동 조정
 - **새벽 선호도 분석** — 02:00 KST에 DB 데이터를 심층 분석해 큐레이션 힌트 생성
-- **Ralph Loop 큐레이션** — 다중 라운드 리서치(최대 10토픽) → 후보 풀 → Claude 최종 선별
 - **에이전트 큐레이션** — 3단계 agentic loop(선호도 분석 → 기사 탐색 → 품질 검토)
 - **토큰 사용량 추적** — Anthropic API 호출 비용을 일별/5시간 윈도우별로 모니터링
 
@@ -25,7 +24,7 @@ main.py
    ├─ agents/
    │  ├─ news_curation_agent.py  ★ tool-use 기반 agentic loop (메인 큐레이터)
    │  └─ preference_analysis.py  새벽 2시 선호도 심층 분석
-   ├─ curator.py                 Ralph Loop 다중 라운드 리서치 엔진
+   ├─ curator.py                 웹 리서치 엔진 (에이전트 래퍼 + 폴백)
    ├─ ranker.py                  기사 점수 계산 & 피드백 처리
    ├─ database.py                SQLite CRUD (articles, preferences)
    ├─ token_tracker.py           API 토큰 사용량 로깅
@@ -41,8 +40,8 @@ main.py
     └─ DB 피드백 읽기 → 선호 소스/키워드 프로파일 생성 → data/preference_profile.json 저장
 
 [06:00 KST] 뉴스 큐레이션 에이전트 (curator.py)
-    ├─ 단일 호출 모드: 웹 검색 1회로 기사 수집 (기본)
-    ├─ Ralph Loop 모드: 토픽별 최대 10라운드 리서치 → 후보 풀 → Claude 최종 선별
+    ├─ 에이전트 모드: 3단계 agentic loop → 기사 선별 (기본)
+    ├─ 폴백 모드: 에이전트 실패 시 웹 검색 1회로 기사 수집
     └─ Discord 게시 (임베드 + 👍/👎 반응 자동 추가)
 ```
 
@@ -120,27 +119,6 @@ python main.py
 | `!reset` | 관리자 | 학습된 선호도 초기화 |
 
 각 기사 임베드에 달린 👍/👎 반응을 누르면 Claude의 리서치 방향이 취향에 맞게 조정된다.
-
----
-
-## 큐레이션 토픽
-
-Ralph Loop 활성화 시 탐색하는 기본 토픽 목록 (`curator.py`의 `_TOPICS`):
-
-| 토픽 | 설명 |
-|------|------|
-| `claude_code_tips` | Claude Code CLI 사용법, 워크플로우, MCP 서버 |
-| `prompt_engineering` | 프롬프트 엔지니어링 기법 (CoT, few-shot 등) |
-| `ai_coding_tools` | Cursor, Copilot, Windsurf 등 AI 코딩 도구 |
-| `mcp_tools` | Model Context Protocol, tool-use 패턴 |
-| `dev_productivity` | AI 활용 개발 생산성, 코드 리뷰, 테스트 생성 |
-| `llm_best_practices` | LLM 프로덕션 운영, RAG, 비용 최적화 |
-| `agent_patterns` | AI 에이전트 아키텍처, LangChain, CrewAI |
-| `korean_practitioner` | 한국어 AI 실전 활용 아티클 |
-| `community_tips` | HN, Reddit 등 개발자 커뮤니티 실전 팁 |
-| `tutorials_deep_dive` | 심층 튜토리얼, API 연동, 파인튜닝 |
-
-> 단일 호출 모드(기본)에서는 위 토픽을 통합하여 한 번에 검색한다.
 
 ---
 
