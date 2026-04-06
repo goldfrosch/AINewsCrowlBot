@@ -33,14 +33,15 @@ topics:
 아래 순서로 도구를 호출해 고품질 아티클 {target_count}개를 선별하세요:
 
 1. analyze_preferences → 사용자 선호도 파악
-2. find_ai_articles → 다음 토픽별로 각각 호출: {topics_list}
-3. review_articles → 모든 수집 기사를 한 번에 검토·선별
+2. find_ai_articles → topics에 전체 목록 [{topics_list}]을 한 번에 넘겨 호출
+3. review_articles → 수집 기사를 검토·선별
 4. 최종 선별된 기사 목록을 JSON 배열로 출력
 
 주의:
 
-- find_ai_articles는 토픽마다 별도로 호출하세요
-- review_articles는 모든 탐색이 끝난 뒤 한 번만 호출하세요
+- find_ai_articles는 **한 번만** 호출하세요 — topics 파라미터에 탐색할 토픽을 전부 담으세요
+- 토픽 목록은 검색 힌트이며, 그 중 가장 최신·고품질인 기사 {target_count}개를 자유롭게 선별합니다
+- review_articles는 탐색이 끝난 뒤 한 번만 호출하세요
 - 최종 출력은 반드시 JSON 배열이어야 합니다
 
 ## 참조 스킬

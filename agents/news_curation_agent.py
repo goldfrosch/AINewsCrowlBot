@@ -156,21 +156,25 @@ def _tool_analyze_preferences() -> dict:
 
 def _tool_find_ai_articles(
     client: anthropic.Anthropic,
-    topic: str,
+    topics: list[str],
     count: int,
     already_collected: set[str],
 ) -> dict:
-    """지정 토픽의 AI 기사를 웹 검색으로 수집한다."""
-    topic_desc = _TOPIC_DESC.get(topic, topic)
+    """여러 토픽에 걸쳐 최신·고품질 AI 기사를 웹 검색으로 수집한다."""
+    topic_lines = [f"- {t}: {_TOPIC_DESC.get(t, t)}" for t in topics]
+
     exclude_urls = db.get_todays_posted_urls()
     all_excluded = list(set(exclude_urls) | already_collected)
 
     lines = [
-        f"Find up to {count} AI news articles specifically about:",
-        f"**{topic_desc}**",
+        f"Find {count} high-quality, RECENT (within 48 hours) AI articles from ANY of these topics:",
         "",
-        "Requirements: published within 48 hours, real news only.",
-        "Run 2–4 targeted searches, then output JSON.",
+        *topic_lines,
+        "",
+        "Rules:",
+        "- Pick the BEST articles regardless of topic distribution — quality and recency first",
+        "- Real articles only, no sponsored content, no press releases",
+        "- Run 2–4 targeted searches across these topics, then output JSON",
         "",
     ]
     if all_excluded:
@@ -203,7 +207,7 @@ def _tool_find_ai_articles(
         token_tracker.log_token_usage(
             response.usage.input_tokens,
             response.usage.output_tokens,
-            caller=f"agent_find_{topic}",
+            caller="agent_find_articles",
             elapsed_seconds=round(time.perf_counter() - _t0, 2),
         )
         for block in response.content:
@@ -228,7 +232,7 @@ def _tool_find_ai_articles(
             token_tracker.log_token_usage(
                 response.usage.input_tokens,
                 response.usage.output_tokens,
-                caller=f"agent_find_{topic}_retry",
+                caller="agent_find_articles_retry",
                 elapsed_seconds=round(time.perf_counter() - _t0, 2),
             )
             for block in response.content:
@@ -238,9 +242,9 @@ def _tool_find_ai_articles(
                         raw_articles = data
                         break
         except Exception as e:
-            print(f"[FindArticles] ({topic}): 재시도 실패 → 건너뜀 ({e})")
+            print(f"[FindArticles] 재시도 실패 → 건너뜀 ({e})")
     except Exception as e:
-        print(f"[FindArticles] ({topic}): 오류 → 건너뜀 ({e})")
+        print(f"[FindArticles] 오류 → 건너뜀 ({e})")
 
     # 필드 정규화
     cleaned = [
@@ -258,10 +262,9 @@ def _tool_find_ai_articles(
     ]
 
     return {
-        "topic": topic,
         "articles": cleaned,
         "count": len(cleaned),
-        "message": f"'{topic}' 토픽에서 {len(cleaned)}개 기사 수집",
+        "message": f"{len(cleaned)}개 기사 수집",
     }
 
 
@@ -384,15 +387,18 @@ _TOOLS = [
     {
         "name": "find_ai_articles",
         "description": (
-            "지정 토픽의 최신 AI 기사를 웹 검색으로 수집한다. 토픽별로 여러 번 호출해 다양한 기사를 모은다."
+            "여러 토픽에 걸쳐 최신·고품질 AI 기사를 웹 검색으로 수집한다. "
+            "토픽 목록은 검색 힌트이며, 그 중 가장 좋은 기사를 자유롭게 선별한다. "
+            "한 번만 호출한다."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "topic": {
-                    "type": "string",
+                "topics": {
+                    "type": "array",
+                    "items": {"type": "string"},
                     "description": (
-                        "탐색할 AI 개발자 토픽. 가능한 값: "
+                        "탐색할 AI 개발자 토픽 목록. 가능한 값: "
                         "claude_code_tips, prompt_engineering, ai_coding_tools, "
                         "multi_agent_orchestration, harness_engineering, ai_code_modification, "
                         "dev_productivity, llm_best_practices, "
@@ -405,7 +411,7 @@ _TOOLS = [
                     "default": 5,
                 },
             },
-            "required": ["topic"],
+            "required": ["topics"],
         },
     },
     {
@@ -572,10 +578,10 @@ def run(
                 print(f" → {result['summary']}")
 
             elif name == "find_ai_articles":
-                topic = inp.get("topic", "models")
-                count = min(int(inp.get("count", 5)), 10)
-                print(f"({topic}, {count}개)", end="")
-                result = _tool_find_ai_articles(client, topic, count, collected)
+                req_topics = inp.get("topics", topics)
+                count = min(int(inp.get("count", target_count)), 10)
+                print(f"({len(req_topics)}개 토픽, {count}개 목표)", end="")
+                result = _tool_find_ai_articles(client, req_topics, count, collected)
                 for a in result.get("articles", []):
                     if a.get("url") and a["url"] not in collected:
                         collected.add(a["url"])
