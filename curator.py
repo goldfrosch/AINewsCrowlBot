@@ -239,6 +239,9 @@ def research(
             return articles
         print("[Curator] 에이전트 결과 없음 — 폴백 실행")
     except Exception as e:
+        import traceback
+
         print(f"[Curator] 에이전트 실패 — 폴백 실행: {e}")
+        traceback.print_exc()
 
     return _fallback_research(count, exclude_urls or [], preferences or {})
