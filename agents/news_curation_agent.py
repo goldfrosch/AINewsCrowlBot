@@ -1,9 +1,9 @@
 """
-뉴스 큐레이션 에이전트 — tool-use 기반 agentic loop
+뉴스 큐레이션 에이전트
 
-2단계를 자율적으로 수행한다:
-  1. analyze_preferences  — DB 선호도 분석
-  2. find_ai_articles     — 웹 검색 최대 2회, 목표 수만큼 기사 수집 후 바로 반환
+2단계를 순서대로 직접 실행한다:
+  1. _tool_analyze_preferences — DB 선호도 분석
+  2. _tool_find_ai_articles    — 웹 검색 최대 2회, 목표 수만큼 기사 수집 후 반환
 
 실행:
   python agents/news_curation_agent.py [--count N] [--topics topic1,topic2]
@@ -82,22 +82,20 @@ def _strip_frontmatter(text: str) -> str:
 
 def _load_agent_spec() -> dict:
     """
-    .claude/agents/news-curation-agent.md 에서 설정과 시스템 프롬프트 템플릿을 로드한다.
+    .claude/agents/news-curation-agent.md 에서 토픽 설정을 로드한다.
 
     반환 키:
-        topics                 — dict[str, str]  토픽명 → 설명
-        default_topics         — list[str]       기본 탐색 토픽 목록
-        system_prompt_template — str             {target_count}, {topics_list} 플레이스홀더 포함
+        topics         — dict[str, str]  토픽명 → 설명
+        default_topics — list[str]       기본 탐색 토픽 목록
     """
     text = _AGENT_DOC_PATH.read_text(encoding="utf-8")
-    match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.DOTALL)
+    match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
     if not match:
         raise ValueError(f"에이전트 문서 형식 오류: {_AGENT_DOC_PATH}")
     frontmatter = yaml.safe_load(match.group(1))
     return {
         "topics": frontmatter.get("topics", {}),
         "default_topics": frontmatter.get("default_topics", []),
-        "system_prompt_template": match.group(2).strip(),
     }
 
 
@@ -261,57 +259,7 @@ def _tool_find_ai_articles(
     }
 
 
-
-# ── 도구 스키마 ───────────────────────────────────────────────────────────────
-
-_TOOLS = [
-    {
-        "name": "analyze_preferences",
-        "description": (
-            "SQLite DB에서 사용자의 기사 선호도를 분석한다. "
-            "좋아하는/싫어하는 소스와 선호 키워드를 반환한다. "
-            "에이전트 시작 시 가장 먼저 호출해야 한다."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "find_ai_articles",
-        "description": (
-            "여러 토픽에 걸쳐 최신·고품질 AI 기사를 웹 검색으로 수집한다. "
-            "토픽 목록은 검색 힌트이며, 그 중 가장 좋은 기사를 자유롭게 선별한다. "
-            "한 번만 호출한다."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "topics": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "탐색할 AI 개발자 토픽 목록. 가능한 값: "
-                        "claude_code_tips, prompt_engineering, ai_coding_tools, "
-                        "multi_agent_orchestration, harness_engineering, ai_code_modification, "
-                        "dev_productivity, llm_best_practices, "
-                        "korean_practitioner, community_tips, tutorials_deep_dive"
-                    ),
-                },
-                "count": {
-                    "type": "integer",
-                    "description": "수집할 기사 수 (기본 5, 최대 10)",
-                    "default": 5,
-                },
-            },
-            "required": ["topics"],
-        },
-    },
-]
-
-
-# ── 에이전트 메인 루프 ─────────────────────────────────────────────────────────
+# ── 에이전트 실행 ─────────────────────────────────────────────────────────────
 
 
 def run(
@@ -324,9 +272,9 @@ def run(
 
     Args:
         target_count:         최종 선별 기사 수
-        topics:               탐색할 토픽 목록 (None이면 기본 5개)
+        topics:               탐색할 토픽 목록 (None이면 기본값)
         external_preferences: 새벽 2시 선호도 분석으로 미리 생성된 프로파일.
-                              있으면 analyze_preferences 도구 결과를 이것으로 대체한다.
+                              있으면 analyze_preferences 결과를 이것으로 대체한다.
 
     Returns:
         선별된 기사 딕셔너리 목록
@@ -336,139 +284,29 @@ def run(
 
     topics = topics or _DEFAULT_TOPICS
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    collected: set[str] = set()  # 이미 수집한 URL 추적
-
-    system_prompt = (
-        _AGENT_SPEC["system_prompt_template"]
-        .replace(
-            "{target_count}",
-            str(target_count),
-        )
-        .replace(
-            "{topics_list}",
-            ", ".join(topics),
-        )
-    )
-
-    # external_preferences가 있으면 에이전트 user 메시지에 힌트를 포함한다
-    hints_text = ""
-    if external_preferences:
-        hints = external_preferences.get("curation_hints", {})
-        if hints and not hints.get("cold_start"):
-            boost = ", ".join(hints.get("boost_sources", [])[:5]) or "없음"
-            avoid = ", ".join(hints.get("avoid_sources", [])[:5]) or "없음"
-            focus = ", ".join(hints.get("focus_keywords", [])[:8]) or "없음"
-            window = hints.get("data_window", "")
-            conf = hints.get("confidence", "")
-            hints_text = (
-                f"\n\n[사전 분석된 선호도 프로파일 — {window}, 신뢰도: {conf}]\n"
-                f"• 선호 소스: {boost}\n"
-                f"• 비선호 소스: {avoid}\n"
-                f"• 집중 키워드: {focus}"
-            )
-            print(f"[Agent] 외부 선호도 프로파일 적용 — {window}, 신뢰도: {conf}")
-
-    messages: list[dict] = [
-        {
-            "role": "user",
-            "content": (
-                f"AI 뉴스를 큐레이션해주세요. "
-                f"탐색 토픽: {', '.join(topics)}. "
-                f"최종 {target_count}개 기사를 선별해 JSON 배열로 반환하세요." + hints_text
-            ),
-        }
-    ]
 
     print(f"[Agent] 시작 — 목표 {target_count}개 / 토픽: {', '.join(topics)}")
 
-    final_articles: list[dict] = []
-    preferences: dict = {}
-    all_found: list[dict] = []
-
-    loop_step = 0
-    while True:
-        loop_step += 1
-        _t0 = time.perf_counter()
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4000,
-            system=system_prompt,
-            tools=_TOOLS,
-            messages=messages,
-        )
-        token_tracker.log_token_usage(
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-            caller=f"agent_loop_step{loop_step}",
-            elapsed_seconds=round(time.perf_counter() - _t0, 2),
-        )
-
-        messages.append({"role": "assistant", "content": response.content})
-
-        # 완료
-        if response.stop_reason == "end_turn":
-            for block in response.content:
-                if hasattr(block, "text"):
-                    result = _extract_json_array(block.text)
-                    if result:
-                        final_articles = result
-                        break
-            print(f"[Agent] 완료 — {len(final_articles)}개 선별")
-            break
-
-        # 도구 호출
-        if response.stop_reason != "tool_use":
-            print(f"[Agent] 예상치 못한 stop_reason: {response.stop_reason}")
-            break
-
-        tool_results = []
-        for block in response.content:
-            if not hasattr(block, "type") or block.type != "tool_use":
-                continue
-
-            name = block.name
-            inp = block.input
-            print(f"[Agent] 도구 호출: {name}", end="")
-
-            if name == "analyze_preferences":
-                result = _tool_analyze_preferences()
-                # 외부 선호도 프로파일이 있으면 curation_hints로 필드를 보강한다
-                if external_preferences:
-                    hints = external_preferences.get("curation_hints", {})
-                    if hints:
-                        result["liked_sources"] = hints.get("boost_sources", result["liked_sources"])
-                        result["disliked_sources"] = hints.get("avoid_sources", result["disliked_sources"])
-                        result["liked_keywords"] = hints.get("focus_keywords", result["liked_keywords"])
-                        result["summary"] += f" [외부 프로파일 적용: {hints.get('data_window', '')}]"
-                preferences = result
-                print(f" → {result['summary']}")
-
-            elif name == "find_ai_articles":
-                req_topics = inp.get("topics", topics)
-                count = min(int(inp.get("count", target_count)), 10)
-                print(f"({len(req_topics)}개 토픽, {count}개 목표)", end="")
-                result = _tool_find_ai_articles(client, req_topics, count, collected)
-                for a in result.get("articles", []):
-                    if a.get("url") and a["url"] not in collected:
-                        collected.add(a["url"])
-                        all_found.append(a)
-                print(f" → {result['message']}")
-
-            else:
-                result = {"error": f"알 수 없는 도구: {name}"}
-                print(f" → 오류: {result['error']}")
-
-            tool_results.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(result, ensure_ascii=False),
-                }
+    # 1단계: 선호도 분석
+    preferences = _tool_analyze_preferences()
+    if external_preferences:
+        hints = external_preferences.get("curation_hints", {})
+        if hints:
+            preferences["liked_sources"] = hints.get("boost_sources", preferences["liked_sources"])
+            preferences["disliked_sources"] = hints.get("avoid_sources", preferences["disliked_sources"])
+            preferences["liked_keywords"] = hints.get("focus_keywords", preferences["liked_keywords"])
+            preferences["summary"] += f" [외부 프로파일 적용: {hints.get('data_window', '')}]"
+            print(
+                f"[Agent] 외부 선호도 프로파일 적용 — {hints.get('data_window', '')}, 신뢰도: {hints.get('confidence', '')}"
             )
+    print(f"[Agent] 선호도 분석 → {preferences['summary']}")
 
-        messages.append({"role": "user", "content": tool_results})
+    # 2단계: 기사 탐색
+    result = _tool_find_ai_articles(client, topics, target_count, set())
+    articles = result.get("articles", [])
 
-    return final_articles
+    print(f"[Agent] 완료 — {len(articles)}개 선별")
+    return articles
 
 
 # ── CLI 진입점 ────────────────────────────────────────────────────────────────
