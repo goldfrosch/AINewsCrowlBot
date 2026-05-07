@@ -53,7 +53,8 @@ jobs:
           script: |
             set -euo pipefail
 
-            cd /ai-news-crowl-bot
+            APP_DIR="$HOME/ai-news-crowl-bot"
+            cd "$APP_DIR"
 
             # ── Pre-flight checks ──────────────────────────────
             if [ ! -f .env ]; then

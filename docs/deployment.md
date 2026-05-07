@@ -29,7 +29,7 @@ GitHub Actions (workflow_dispatch)
       → ruff check (린트)
       → pytest (테스트)
   → Deploy Job: SSH로 서버 접속
-      → cd /ai-news-crowl-bot
+      → cd ~/ai-news-crowl-bot
       → git fetch origin main && git reset --hard origin/main
       → sudo docker compose build
       → sudo docker compose up -d
@@ -40,7 +40,7 @@ GitHub Actions (workflow_dispatch)
 |------|-----|
 | 워크플로우 이름 | `Deploy` |
 | 트리거 방식 | `workflow_dispatch` (수동만) |
-| 서버 프로젝트 경로 | `/ai-news-crowl-bot` |
+| 서버 프로젝트 경로 | `~/ai-news-crowl-bot` (`$HOME/ai-news-crowl-bot`) |
 | 컨테이너 이름 | `ainewsbot` |
 | 서비스 이름 | `bot` |
 | Docker 명령어 | `sudo docker compose` |
@@ -99,9 +99,9 @@ sudo -n docker compose version
 ### 4-1. 프로젝트 클론
 
 ```bash
-cd /
+cd ~
 git clone https://github.com/<사용자>/<레포>.git ai-news-crowl-bot
-cd /ai-news-crowl-bot
+cd ~/ai-news-crowl-bot
 ```
 
 ### 4-2. .env 파일 생성
@@ -169,7 +169,7 @@ CI가 실패하면 Deploy Job은 실행되지 않는다.
 CI 통과 후 SSH로 서버에 접속해 아래 순서로 실행된다.
 
 ```
-1. cd /ai-news-crowl-bot
+1. cd ~/ai-news-crowl-bot
 2. git fetch origin main
 3. git reset --hard origin/main
 4. sudo docker compose build
@@ -326,7 +326,7 @@ deploy ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/bin/docker compose
 2. 서버에서 수동 빌드 재현:
 
 ```bash
-cd /ai-news-crowl-bot
+cd ~/ai-news-crowl-bot
 sudo docker compose build
 ```
 
