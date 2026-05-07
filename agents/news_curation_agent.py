@@ -28,15 +28,20 @@ import token_tracker
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
 _SYSTEM_RESEARCH = """\
-You are a focused researcher finding high-quality articles for developers who build and operate AI systems.
+You are a focused researcher finding high-quality articles for developers who build and operate AI systems
+AND developers who use AI to enhance game development — especially in areas programmers can't easily do themselves
+(3D modeling, UI/UX design, textures, animation, sound/music, character design).
+
 Your task is to find practical, actionable content — NOT general AI news.
 
 Target reader: software engineer working on agentic systems, multi-agent orchestration,
 AI-assisted code modification, or LLM infrastructure and evaluation harnesses.
+Also: game developers leveraging AI to create art assets, UI, sound, and procedural content.
 
 Rules:
 - Prioritize tutorials, how-to guides, best practices, and case studies over news
 - Articles should contain concrete techniques, code examples, or measurable insights
+- For game dev AI: focus on tools/workflows that let programmers create art, UI, sound without specialized skills
 - No sponsored content, generic AI hype, or press releases
 - No pure news about model releases unless it directly affects developer workflow
 - Maximum 2 targeted searches, then output JSON immediately
@@ -324,7 +329,7 @@ def main() -> None:
         "--topics",
         type=str,
         default="",
-        help="탐색 토픽 콤마 구분 (기본: models,company_news,arxiv_papers,dev_tools,korean_news)",
+        help="탐색 토픽 콤마 구분 (기본: claude_code_tips,prompt_engineering,multi_agent_orchestration,harness_engineering,ai_code_modification,korean_practitioner,ai_game_art_asset,ai_game_ui_sound)",
     )
     args = parser.parse_args()
 

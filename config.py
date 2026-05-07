@@ -103,6 +103,34 @@ AI_KEYWORDS = [
     "거대언어모델",
     "ai 워크플로우",
     "ai 도구",
+    # AI 게임 개발 (프로그래머가 못하는 영역 보완)
+    "ai 3d modeling",
+    "ai game art",
+    "ai texture generation",
+    "ai animation",
+    "ai game ui",
+    "ai game design",
+    "procedural generation",
+    "ai game asset",
+    "ai sound design",
+    "ai music generation",
+    "ai character design",
+    "ai level design",
+    "stable diffusion game",
+    "midjourney game",
+    "ai sprite",
+    "ai voxel",
+    "ai game development",
+    "generative ai game",
+    "npc ai",
+    "ai game testing",
+    # 한국어 게임 개발
+    "ai 게임 개발",
+    "ai 3d 모델링",
+    "ai 게임 아트",
+    "ai 게임 디자인",
+    "ai 애니메이션",
+    "ai 게임 에셋",
 ]
 
 # ── Reddit 서브레딧 ───────────────────────────────
@@ -112,6 +140,13 @@ REDDIT_SUBREDDITS = [
     "artificial",
     "AINews",
     "singularity",
+    # 게임 개발 AI
+    "gamedev",
+    "IndieGaming",
+    "unrealengine",
+    "unity3d",
+    "StableDiffusion",
+    "proceduralgeneration",
 ]
 
 # ── YouTube 검색 쿼리 ─────────────────────────────
@@ -120,6 +155,12 @@ YOUTUBE_SEARCH_QUERIES = [
     "LLM tutorial 2025",
     "artificial intelligence breakthrough",
     "인공지능 최신 뉴스",
+    # 게임 개발 AI
+    "AI game development tutorial 2025",
+    "AI 3D modeling game assets workflow",
+    "AI game art generation tools",
+    "AI game UI design workflow",
+    "procedural generation AI game",
 ]
 
 # ── RSS 피드 ──────────────────────────────────────
@@ -132,6 +173,12 @@ RSS_FEEDS: dict[str, str] = {
     "ZDNet Korea": "https://zdnet.co.kr/rss/",
     "IT조선": "https://it.chosun.com/section/rss/all.php",
     "Ars Technica AI": "https://feeds.arstechnica.com/arstechnica/technology-lab",
+    # 게임 개발 AI
+    "80 Level": "https://80.lv/feed/",
+    "Game Developer": "https://www.gamedeveloper.com/rss.xml",
+    "GDC Blog": "https://gdconf.com/rss.xml",
+    "ArXiv cs.GR": "https://export.arxiv.org/rss/cs.GR",
+    "Reddit r/gamedev": "https://www.reddit.com/r/gamedev/.rss",
 }
 
 # RSS에서 AI 키워드 필터링이 필요 없는 소스 (이미 AI 특화)
@@ -140,5 +187,8 @@ RSS_NO_FILTER_SOURCES = {
     "The Verge AI",
     "ArXiv cs.AI",
     "ArXiv cs.LG",
+    "ArXiv cs.GR",
     "Medium AI",
+    "80 Level",
+    "Game Developer",
 }
