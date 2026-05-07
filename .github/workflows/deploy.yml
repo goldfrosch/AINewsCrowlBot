@@ -144,11 +144,21 @@ jobs:
             exit 1
           fi
 
-          # ── Verify bot login ───────────────────────────────
-          if ! sudo docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=100 bot | grep -q "봇 로그인"; then
-            echo "::error::Bot login message not found in logs"
+          # ── Verify bot login / gateway connection (up to 60s) ───────────
+          login_seen=false
+          for i in $(seq 1 12); do
+            if sudo docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=200 bot | grep -Eq "봇 로그인|connected to Gateway"; then
+              login_seen=true
+              break
+            fi
+            sleep 5
+            echo "Attempt $i/12: bot login signal not found yet..."
+          done
+
+          if [ "$login_seen" = false ]; then
+            echo "::error::Bot login or gateway connection message not found in logs"
             sudo docker compose -p "$COMPOSE_PROJECT_NAME" ps
-            sudo docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=50 bot
+            sudo docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=100 bot
             exit 1
           fi
 

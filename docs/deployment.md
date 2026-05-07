@@ -207,10 +207,10 @@ sudo docker compose -p ai-news-crowl-bot ps
 
 ```bash
 # 로그에서 로그인 성공 확인
-sudo docker compose -p ai-news-crowl-bot logs bot | grep "봇 로그인"
+sudo docker compose -p ai-news-crowl-bot logs bot | grep -E "봇 로그인|connected to Gateway"
 ```
 
-로그에 `✅ 봇 로그인: {bot.user}  |  채널: {DISCORD_CHANNEL_ID}` 가 나타나면 봇이 정상적으로 Discord에 연결된 것이다.
+로그에 `✅ 봇 로그인: {bot.user}  |  채널: {DISCORD_CHANNEL_ID}` 또는 discord.py의 `connected to Gateway` 메시지가 나타나면 봇이 정상적으로 Discord Gateway에 연결된 것이다. 워크플로우는 이 신호를 최대 60초까지 기다린다.
 
 ---
 
@@ -367,14 +367,14 @@ sudo docker compose -p ai-news-crowl-bot logs --tail=50 bot
 
 ---
 
-### 로그에 로그인 메시지 없음
+### 로그에 로그인/Gateway 메시지 없음
 
-**증상**: 컨테이너는 `Up`이지만 `✅ 봇 로그인` 로그가 보이지 않음
+**증상**: 컨테이너는 `Up`이지만 `✅ 봇 로그인` 또는 `connected to Gateway` 로그가 보이지 않음
 
 **확인**:
 
 ```bash
-sudo docker compose -p ai-news-crowl-bot logs --tail=100 bot
+sudo docker compose -p ai-news-crowl-bot logs --tail=200 bot
 ```
 
 **해결**:
