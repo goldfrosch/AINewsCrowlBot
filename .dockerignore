@@ -1,8 +1,28 @@
+# .env and data/ must never enter the image — they contain secrets and runtime DB
+
+# version control / project metadata
 .git
-.env
-.venv
-venv/
+.github
+.claude/
+.sisyphus
+
+# Python caches / virtualenvs
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv
+venv/
+
+# env / secrets / runtime data
+.env
+.env.*
 data/
-.claude/
+
+# tests / docs / misc
+tests/
+docs/
+*.md
+*.log
+.DS_Store
