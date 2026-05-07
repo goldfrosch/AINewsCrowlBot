@@ -1,0 +1,100 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  deploy:
+    needs: ci
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            cd /ai-news-crowl-bot
+
+            # ── Pre-flight checks ──────────────────────────────
+            if [ ! -f .env ]; then
+              echo "::error::Missing .env file — aborting deploy"
+              exit 1
+            fi
+
+            mkdir -p data
+
+            # ── Pull latest code ───────────────────────────────
+            git fetch origin main
+            git reset --hard origin/main
+
+            # ── Build & start ──────────────────────────────────
+            sudo docker compose build
+            sudo docker compose up -d
+
+            # ── Health check (up to 30s) ───────────────────────
+            healthy=false
+            for i in $(seq 1 6); do
+              sleep 5
+              if sudo docker compose ps | grep -q "Up"; then
+                healthy=true
+                break
+              fi
+              echo "Attempt $i/6: container not up yet..."
+            done
+
+            if [ "$healthy" = false ]; then
+              echo "::error::Container failed to start"
+              sudo docker compose ps
+              sudo docker compose logs --tail=50 bot
+              exit 1
+            fi
+
+            # ── Verify bot login ───────────────────────────────
+            if ! sudo docker compose logs --tail=100 bot | grep -q "봇 로그인"; then
+              echo "::error::Bot login message not found in logs"
+              sudo docker compose ps
+              sudo docker compose logs --tail=50 bot
+              exit 1
+            fi
+
+            echo "Deploy complete — bot is healthy"
