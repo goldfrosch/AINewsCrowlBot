@@ -42,60 +42,115 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Package release
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar \
+            --exclude='./.git' \
+            --exclude='./.github' \
+            --exclude='./.sisyphus' \
+            --exclude='./.env' \
+            --exclude='./.env.*' \
+            --exclude='./data' \
+            --exclude='./dist' \
+            -czf dist/release.tgz .
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload release package
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/deploy_key dist/release.tgz \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:~/ai-news-crowl-bot-release.tgz"
+
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
-          script_stop: true
-          script: |
-            set -euo pipefail
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "GITHUB_SHA='${{ github.sha }}' bash -s" <<'REMOTE'
+          set -euo pipefail
 
-            APP_DIR="$HOME/ai-news-crowl-bot"
-            cd "$APP_DIR"
+          APP_BASE="$HOME/ai-news-crowl-bot"
+          SHARED_DIR="$APP_BASE/shared"
+          RELEASE_DIR="$APP_BASE/releases/$GITHUB_SHA"
+          COMPOSE_PROJECT_NAME="ai-news-crowl-bot"
 
-            # ── Pre-flight checks ──────────────────────────────
-            if [ ! -f .env ]; then
-              echo "::error::Missing .env file — aborting deploy"
-              exit 1
+          mkdir -p "$SHARED_DIR/data" "$APP_BASE/releases"
+
+          if [ ! -f "$SHARED_DIR/.env" ] && [ -f "$APP_BASE/.env" ]; then
+            cp "$APP_BASE/.env" "$SHARED_DIR/.env"
+          fi
+
+          if [ -d "$APP_BASE/data" ] && [ ! -L "$APP_BASE/data" ]; then
+            if [ -z "$(find "$SHARED_DIR/data" -mindepth 1 -print -quit)" ]; then
+              cp -a "$APP_BASE/data/." "$SHARED_DIR/data/"
+              mv "$APP_BASE/data" "$APP_BASE/data.migrated.$(date -u +%Y%m%d%H%M%S)"
+            else
+              echo "Skipping legacy data migration: $SHARED_DIR/data is not empty"
             fi
+          fi
 
-            mkdir -p data
+          if [ ! -f "$SHARED_DIR/.env" ]; then
+            echo "::error::Missing $SHARED_DIR/.env — aborting deploy"
+            exit 1
+          fi
 
-            # ── Pull latest code ───────────────────────────────
-            git fetch origin main
-            git reset --hard origin/main
+          rm -rf "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR"
+          tar -xzf "$APP_BASE-release.tgz" -C "$RELEASE_DIR"
+          rm -f "$APP_BASE-release.tgz"
 
-            # ── Build & start ──────────────────────────────────
-            sudo docker compose build
-            sudo docker compose up -d
+          if [ -d "$APP_BASE/current" ] && [ ! -L "$APP_BASE/current" ]; then
+            echo "::error::$APP_BASE/current exists and is not a symlink — aborting deploy"
+            exit 1
+          fi
 
-            # ── Health check (up to 30s) ───────────────────────
-            healthy=false
-            for i in $(seq 1 6); do
-              sleep 5
-              if sudo docker compose ps | grep -q "Up"; then
-                healthy=true
-                break
-              fi
-              echo "Attempt $i/6: container not up yet..."
-            done
+          ln -sfnT "$SHARED_DIR/.env" "$RELEASE_DIR/.env"
+          ln -sfnT "$SHARED_DIR/data" "$RELEASE_DIR/data"
+          ln -sfnT "$RELEASE_DIR" "$APP_BASE/current"
 
-            if [ "$healthy" = false ]; then
-              echo "::error::Container failed to start"
-              sudo docker compose ps
-              sudo docker compose logs --tail=50 bot
-              exit 1
+          cd "$APP_BASE/current"
+
+          # ── Build & start ──────────────────────────────────
+          sudo docker compose -p "$COMPOSE_PROJECT_NAME" build
+          sudo docker compose -p "$COMPOSE_PROJECT_NAME" up -d
+
+          # ── Health check (up to 30s) ───────────────────────
+          healthy=false
+          for i in $(seq 1 6); do
+            sleep 5
+            if sudo docker compose -p "$COMPOSE_PROJECT_NAME" ps | grep -q "Up"; then
+              healthy=true
+              break
             fi
+            echo "Attempt $i/6: container not up yet..."
+          done
 
-            # ── Verify bot login ───────────────────────────────
-            if ! sudo docker compose logs --tail=100 bot | grep -q "봇 로그인"; then
-              echo "::error::Bot login message not found in logs"
-              sudo docker compose ps
-              sudo docker compose logs --tail=50 bot
-              exit 1
-            fi
+          if [ "$healthy" = false ]; then
+            echo "::error::Container failed to start"
+            sudo docker compose -p "$COMPOSE_PROJECT_NAME" ps
+            sudo docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=50 bot
+            exit 1
+          fi
 
-            echo "Deploy complete — bot is healthy"
+          # ── Verify bot login ───────────────────────────────
+          if ! sudo docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=100 bot | grep -q "봇 로그인"; then
+            echo "::error::Bot login message not found in logs"
+            sudo docker compose -p "$COMPOSE_PROJECT_NAME" ps
+            sudo docker compose -p "$COMPOSE_PROJECT_NAME" logs --tail=50 bot
+            exit 1
+          fi
+
+          echo "Deploy complete — bot is healthy"
+          REMOTE

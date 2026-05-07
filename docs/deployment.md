@@ -29,10 +29,11 @@ GitHub Actions (workflow_dispatch)
       → ruff check (린트)
       → pytest (테스트)
   → Deploy Job: SSH로 서버 접속
-      → cd ~/ai-news-crowl-bot
-      → git fetch origin main && git reset --hard origin/main
-      → sudo docker compose build
-      → sudo docker compose up -d
+      → release.tgz 업로드
+      → ~/ai-news-crowl-bot/releases/<commit> 에 압축 해제
+      → shared/.env 및 shared/data 연결
+      → sudo docker compose -p ai-news-crowl-bot build
+      → sudo docker compose -p ai-news-crowl-bot up -d
       → 헬스 체크 (docker compose ps + 로그 grep)
 ```
 
@@ -40,10 +41,10 @@ GitHub Actions (workflow_dispatch)
 |------|-----|
 | 워크플로우 이름 | `Deploy` |
 | 트리거 방식 | `workflow_dispatch` (수동만) |
-| 서버 프로젝트 경로 | `~/ai-news-crowl-bot` (`$HOME/ai-news-crowl-bot`) |
+| 서버 프로젝트 경로 | `~/ai-news-crowl-bot` (`$HOME/ai-news-crowl-bot`, Git repo 불필요) |
 | 컨테이너 이름 | `ainewsbot` |
 | 서비스 이름 | `bot` |
-| Docker 명령어 | `sudo docker compose` |
+| Docker 명령어 | `sudo docker compose -p ai-news-crowl-bot` |
 
 ---
 
@@ -78,7 +79,6 @@ ssh-keyscan -H <호스트_IP_또는_도메인>
 |----------|------------|-----------|
 | Docker Engine | `docker --version` | 버전 정보 출력 |
 | Docker Compose V2 | `sudo -n docker compose version` | 버전 정보 출력 |
-| Git | `git --version` | 버전 정보 출력 |
 | Python 3.11+ (로컬 개발용이며 서버에서는 불필요) | | |
 | 패스워드 없는 sudo | `sudo -n docker compose version` | 에러 없이 버전 출력 |
 
@@ -96,19 +96,22 @@ sudo -n docker compose version
 
 새 서버에 처음 배포하는 경우, 아래 절차를 한 번만 수행한다.
 
-### 4-1. 프로젝트 클론
+### 4-1. 프로젝트 디렉토리 생성
 
 ```bash
-cd ~
-git clone https://github.com/<사용자>/<레포>.git ai-news-crowl-bot
+mkdir -p ~/ai-news-crowl-bot/shared/data
 cd ~/ai-news-crowl-bot
 ```
 
+서버의 `~/ai-news-crowl-bot` 디렉토리는 Git 저장소일 필요가 없다. GitHub Actions가 CI를 통과한 소스 패키지를 SSH/SCP로 업로드한다.
+
 ### 4-2. .env 파일 생성
 
-서버에서 직접 생성한다. **GitHub에 커밋하지 않는다.**
+서버에서 직접 생성한다. **GitHub에 커밋하지 않는다.** 워크플로우는 최초 배포 시 `~/ai-news-crowl-bot/.env`를 `~/ai-news-crowl-bot/shared/.env`로 복사해서 이후 릴리스에 연결한다. 새 서버라면 처음부터 `shared/.env`에 생성해도 된다.
 
 ```bash
+mkdir -p ~/ai-news-crowl-bot/shared
+cd ~/ai-news-crowl-bot/shared
 cat > .env << 'EOF'
 # 필수
 DISCORD_BOT_TOKEN=봇_토큰
@@ -125,16 +128,21 @@ EOF
 ### 4-3. 데이터 디렉토리 확인
 
 ```bash
-mkdir -p data
+mkdir -p ~/ai-news-crowl-bot/shared/data
 ```
 
 SQLite DB(`data/bot.db`)는 `docker-compose.yml`의 볼륨 마운트로 컨테이너 재시작 시에도 보존된다.
 
-### 4-4. 최초 빌드 및 실행
+### 4-4. 최초 배포 실행
+
+서버 세팅 후 GitHub Actions의 **Deploy** 워크플로우를 실행한다. 첫 배포가 성공하면 `~/ai-news-crowl-bot/current`가 생성되고, 그 안에서 Docker Compose가 실행된다.
+
+첫 배포 이후 서버에서 수동 확인이 필요할 때만 아래 명령을 사용한다.
 
 ```bash
-sudo docker compose build
-sudo docker compose up -d
+cd ~/ai-news-crowl-bot/current
+sudo docker compose -p ai-news-crowl-bot build
+sudo docker compose -p ai-news-crowl-bot up -d
 ```
 
 ---
@@ -169,13 +177,18 @@ CI가 실패하면 Deploy Job은 실행되지 않는다.
 CI 통과 후 SSH로 서버에 접속해 아래 순서로 실행된다.
 
 ```
-1. cd ~/ai-news-crowl-bot
-2. git fetch origin main
-3. git reset --hard origin/main
-4. sudo docker compose build
-5. sudo docker compose up -d
-6. 헬스 체크
+1. GitHub runner에서 .env, data/, .git 등을 제외한 release.tgz 생성
+2. release.tgz를 서버 ~/ai-news-crowl-bot-release.tgz로 업로드
+3. 서버에서 ~/ai-news-crowl-bot/releases/<commit-sha>/에 압축 해제
+4. shared/.env와 shared/data를 릴리스 디렉토리에 심볼릭 링크로 연결
+5. ~/ai-news-crowl-bot/current 심볼릭 링크를 새 릴리스로 전환
+6. cd ~/ai-news-crowl-bot/current
+7. sudo docker compose -p ai-news-crowl-bot build
+8. sudo docker compose -p ai-news-crowl-bot up -d
+9. 헬스 체크
 ```
+
+레거시 구조에서 `~/ai-news-crowl-bot/data`가 이미 존재하는 경우, 워크플로우는 `shared/data`가 비어 있을 때만 한 번 복사한 뒤 기존 디렉토리를 `data.migrated.<timestamp>`로 이름 변경한다. 이후 배포에서는 `shared/data`를 기준으로만 DB를 보존한다.
 
 ---
 
@@ -187,14 +200,14 @@ CI 통과 후 SSH로 서버에 접속해 아래 순서로 실행된다.
 
 ```bash
 # 컨테이너 상태 확인
-sudo docker compose ps
+sudo docker compose -p ai-news-crowl-bot ps
 ```
 
 `bot` 서비스 상태가 `Up`이면 정상이다.
 
 ```bash
 # 로그에서 로그인 성공 확인
-sudo docker compose logs bot | grep "봇 로그인"
+sudo docker compose -p ai-news-crowl-bot logs bot | grep "봇 로그인"
 ```
 
 로그에 `✅ 봇 로그인: {bot.user}  |  채널: {DISCORD_CHANNEL_ID}` 가 나타나면 봇이 정상적으로 Discord에 연결된 것이다.
@@ -207,10 +220,10 @@ sudo docker compose logs bot | grep "봇 로그인"
 
 ```bash
 # 컨테이너 상태 출력
-sudo docker compose ps
+sudo docker compose -p ai-news-crowl-bot ps
 
 # 최근 로그 50줄 출력
-sudo docker compose logs --tail=50 bot
+sudo docker compose -p ai-news-crowl-bot logs --tail=50 bot
 ```
 
 이 정보는 Actions 로그에서 확인할 수 있으며, 실패 원인 파악에 사용한다.
@@ -231,9 +244,11 @@ GitHub Actions 워크플로우는 **절대로** 서버의 `.env` 파일이나 `d
 
 ### 배포 시 보존되는 항목
 
-- `git reset --hard`는 Git이 추적하는 파일만 변경한다
-- `.env`는 `.gitignore`에 포함되어 있으므로 영향을 받지 않는다
-- `data/` 역시 `.gitignore`에 포함되어 보존된다
+- 업로드 패키지는 `.env`, `.env.*`, `data/`, `.git`을 제외하고 생성한다
+- 프로덕션 `.env`는 `~/ai-news-crowl-bot/shared/.env`에 보관하고 각 릴리스에 심볼릭 링크로 연결한다
+- 프로덕션 DB는 `~/ai-news-crowl-bot/shared/data/`에 보관하고 각 릴리스에 심볼릭 링크로 연결한다
+- 새 릴리스는 `releases/<commit-sha>/`에 풀리므로 기존 `shared/` 상태를 덮어쓰지 않는다
+- 기존 루트 `data/`는 `shared/data`가 비어 있을 때만 1회 마이그레이션되며, 재배포 때 오래된 DB로 덮어쓰지 않는다
 
 ### .env 관리 원칙
 
@@ -326,8 +341,8 @@ deploy ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/bin/docker compose
 2. 서버에서 수동 빌드 재현:
 
 ```bash
-cd ~/ai-news-crowl-bot
-sudo docker compose build
+cd ~/ai-news-crowl-bot/current
+sudo docker compose -p ai-news-crowl-bot build
 ```
 
 **해결**: `Dockerfile` 또는 `requirements.txt` 오류 수정 후 푸시.
@@ -341,8 +356,8 @@ sudo docker compose build
 **확인**:
 
 ```bash
-sudo docker compose ps
-sudo docker compose logs --tail=50 bot
+sudo docker compose -p ai-news-crowl-bot ps
+sudo docker compose -p ai-news-crowl-bot logs --tail=50 bot
 ```
 
 **해결**:
@@ -359,7 +374,7 @@ sudo docker compose logs --tail=50 bot
 **확인**:
 
 ```bash
-sudo docker compose logs --tail=100 bot
+sudo docker compose -p ai-news-crowl-bot logs --tail=100 bot
 ```
 
 **해결**:
