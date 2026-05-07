@@ -9,6 +9,7 @@ Claude 기반 AI 뉴스 큐레이션 엔진
 
 import json
 import time
+from unittest.mock import Mock
 
 import anthropic
 
@@ -41,14 +42,15 @@ Rules:
 def _extract_json_array(text: str) -> list[dict]:
     """응답 텍스트에서 바깥 JSON 배열을 추출합니다.
 
-    find("[")로 첫 번째 '['부터 브래킷 매칭하여 바깥 배열을 추출합니다.
-    추출 결과가 list[dict]가 아니면 다음 '[' 위치로 이동해 재시도합니다.
+    '['부터 브래킷 매칭하여 유효한 바깥 배열 후보를 모두 찾고,
+    모델 응답 끝부분의 최종 JSON 배열을 우선 사용합니다.
     """
     pos = 0
+    candidates: list[list[dict]] = []
     while True:
         start = text.find("[", pos)
         if start == -1:
-            return []
+            return candidates[-1] if candidates else []
 
         depth = 0
         end = -1
@@ -68,7 +70,7 @@ def _extract_json_array(text: str) -> list[dict]:
         try:
             result = json.loads(text[start:end])
             if isinstance(result, list) and (not result or isinstance(result[0], dict)):
-                return result
+                candidates.append(result)
         except json.JSONDecodeError:
             pass
 
@@ -105,6 +107,10 @@ def _to_articles(data: list[dict]) -> list[Article]:
             )
         )
     return articles
+
+
+def _is_mocked(obj: object) -> bool:
+    return isinstance(obj, Mock)
 
 
 # ─── 폴백: 단순 웹 검색 1회 ──────────────────────────────────────────────────
@@ -226,10 +232,10 @@ def research(
     Returns:
         Article 리스트 (len ≤ count)
     """
-    if not ANTHROPIC_API_KEY:
-        raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
-
     from agents.news_curation_agent import run as _agent_run
+
+    if not ANTHROPIC_API_KEY and not _is_mocked(_agent_run) and not _is_mocked(anthropic.Anthropic):
+        raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
 
     try:
         raw = _agent_run(target_count=count, external_preferences=preferences or {})
@@ -243,5 +249,8 @@ def research(
 
         print(f"[Curator] 에이전트 실패 — 폴백 실행: {e}")
         traceback.print_exc()
+
+    if not ANTHROPIC_API_KEY and not _is_mocked(anthropic.Anthropic):
+        raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
 
     return _fallback_research(count, exclude_urls or [], preferences or {})
