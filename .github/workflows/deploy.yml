@@ -53,6 +53,8 @@ jobs:
             --exclude='./.git' \
             --exclude='./.github' \
             --exclude='./.sisyphus' \
+            --exclude='./.claude/settings*.json' \
+            --exclude='./.claude/project' \
             --exclude='./.env' \
             --exclude='./.env.*' \
             --exclude='./data' \

@@ -3,8 +3,17 @@
 # version control / project metadata
 .git
 .github
-.claude/
 .sisyphus
+
+# Claude runtime prompts are required by agents/news_curation_agent.py.
+# Keep agent/skill markdown, but exclude local Claude app settings and project notes.
+.claude/*
+!.claude/agents/
+!.claude/agents/**
+!.claude/skills/
+!.claude/skills/**
+.claude/settings*.json
+.claude/project/
 
 # Python caches / virtualenvs
 __pycache__/
@@ -26,3 +35,9 @@ docs/
 *.md
 *.log
 .DS_Store
+
+# Re-include Claude runtime markdown after the global *.md exclusion above.
+!.claude/agents/
+!.claude/agents/**
+!.claude/skills/
+!.claude/skills/**
