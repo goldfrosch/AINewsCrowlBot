@@ -1,0 +1,48 @@
+Task 2: Deploy Guardrails Verification
+========================================
+Date: 2026-05-07
+File: .github/workflows/deploy.yml
+
+REQUIRED PATTERNS (all present):
+  [PASS] workflow_dispatch
+  [PASS] deploy-production (concurrency group)
+  [PASS] cancel-in-progress: false
+  [PASS] actions/setup-python@v5
+  [PASS] actions/cache@v4
+  [PASS] ruff check .
+  [PASS] pytest tests/ -v
+  [PASS] needs: ci
+  [PASS] github.ref == 'refs/heads/main'
+  [PASS] environment: production
+  [PASS] appleboy/ssh-action@v1
+  [PASS] secrets.DEPLOY_HOST
+  [PASS] secrets.DEPLOY_USER
+  [PASS] secrets.DEPLOY_SSH_KEY
+  [PASS] secrets.SSH_KNOWN_HOSTS
+  [PASS] [ ! -f .env ] (pre-flight check)
+  [PASS] mkdir -p data
+  [PASS] git fetch origin main
+  [PASS] git reset --hard origin/main
+  [PASS] sudo docker compose build
+  [PASS] sudo docker compose up -d
+  [PASS] health check loop (seq 1 6, sleep 5)
+  [PASS] sudo docker compose ps | grep -q "Up"
+  [PASS] 봇 로그인 (bot login verification)
+  [PASS] sudo docker compose logs --tail=50 bot (failure diagnostics)
+  [PASS] set -euo pipefail (script safety)
+
+FORBIDDEN PATTERNS (none found):
+  [PASS] No 'push:' trigger
+  [PASS] No 'pull_request:' trigger
+  [PASS] No 'schedule:' trigger
+  [PASS] No 'release:' trigger
+  [PASS] No 'git pull' command
+  [PASS] No 'docker-compose.sh' reference
+  [PASS] No 'docker compose down -v'
+  [PASS] No 'cat > .env' or 'echo > .env'
+  [PASS] No 'vulture' tool
+  [PASS] No 'dry_run' reference
+  [PASS] No 'coverage' tool
+  [PASS] No 'rollback' reference
+
+All guardrails satisfied.

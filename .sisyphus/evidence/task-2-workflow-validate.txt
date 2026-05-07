@@ -1,0 +1,26 @@
+Task 2: Workflow Validation Evidence
+=====================================
+Date: 2026-05-07
+File: .github/workflows/deploy.yml
+
+YAML Syntax: VALID (verified via PyYAML safe_load)
+
+File Structure (100 lines):
+  - Line 1: name: Deploy
+  - Line 3-4: on: workflow_dispatch (manual trigger only)
+  - Line 6-8: concurrency group deploy-production, cancel-in-progress: false
+  - Line 11-37: CI job (ubuntu-latest)
+    - actions/checkout@v4
+    - actions/setup-python@v5 (Python 3.11)
+    - actions/cache@v4 (pip cache keyed on requirements.txt hash)
+    - pip install -r requirements.txt
+    - ruff check .
+    - pytest tests/ -v
+  - Line 39-100: Deploy job
+    - needs: ci
+    - if: github.ref == 'refs/heads/main'
+    - environment: production
+    - appleboy/ssh-action@v1 with secrets DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, SSH_KNOWN_HOSTS
+    - Remote script: cd /ai-news-crowl-bot, verify .env, mkdir -p data, git fetch/reset, docker compose build/up, health check loop, bot login verification, failure diagnostics
+
+All required elements present.
