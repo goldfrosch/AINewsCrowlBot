@@ -28,10 +28,7 @@ def _is_game_dev_article(article: dict) -> bool:
         for gdk in GAME_DEV_KEYWORDS:
             if gdk in kw_lower or kw_lower in gdk:
                 return True
-    for gdk in GAME_DEV_KEYWORDS:
-        if gdk in search_text:
-            return True
-    return False
+    return any(gdk in search_text for gdk in GAME_DEV_KEYWORDS)
 
 
 def _ensure_game_dev_article(ranked: list[dict], count: int) -> list[dict]:
