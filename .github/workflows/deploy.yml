@@ -1,7 +1,9 @@
 name: Deploy
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - 'deploy-*'
 
 concurrency:
   group: deploy-production
@@ -38,7 +40,6 @@ jobs:
 
   deploy:
     needs: ci
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     steps:
