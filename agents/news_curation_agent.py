@@ -268,7 +268,7 @@ def _tool_find_ai_articles(
 
 
 def run(
-    target_count: int = 5,
+    target_count: int = 3,
     topics: list[str] | None = None,
     external_preferences: dict | None = None,
 ) -> list[dict]:
@@ -322,8 +322,8 @@ def main() -> None:
     parser.add_argument(
         "--count",
         type=int,
-        default=5,
-        help="선별할 기사 수 (기본: 5)",
+        default=3,
+        help="선별할 기사 수 (기본: 3)",
     )
     parser.add_argument(
         "--topics",

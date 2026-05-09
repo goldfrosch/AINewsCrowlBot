@@ -421,7 +421,7 @@ async def cmd_help(ctx: commands.Context):
     embed.add_field(
         name="일반",
         value=(
-            "`!more [n]`  — 추가 기사 n개 요청 (기본 5, 최대 10)\n"
+            "`!more [n]`  — 추가 기사 n개 요청 (기본 3, 최대 10)\n"
             "`!stats`     — 봇 통계 및 선호도 현황\n"
             "`!tokens`    — Claude 토큰 사용량 (오늘/윈도우/평균)\n"
             "`!help_ai`   — 이 도움말"

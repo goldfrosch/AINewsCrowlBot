@@ -24,7 +24,7 @@ from pipeline import run_curation_pipeline
 
 def main():
     parser = argparse.ArgumentParser(description="AINewsCrowlBot dry-run (no Discord)")
-    parser.add_argument("--count", type=int, default=5, help="수집할 기사 수 (기본 5)")
+    parser.add_argument("--count", type=int, default=3, help="수집할 기사 수 (기본 3)")
     parser.add_argument("--verbose", "-v", action="store_true", help="상세 출력")
     parser.add_argument("--db", type=str, default="data/bot.db", help="DB 경로")
     args = parser.parse_args()

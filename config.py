@@ -33,7 +33,7 @@ PREFERENCE_ANALYSIS_HOUR = 2  # 새벽 2시 KST: 선호도 분석
 DAILY_POST_HOUR = 6  # 오전 6시 KST: 뉴스 브리핑
 
 # ── 게시 설정 ─────────────────────────────────────
-ARTICLES_PER_POST = 5  # 하루 기본 게시 수
+ARTICLES_PER_POST = 3  # 하루 기본 게시 수
 MORE_ARTICLES_MAX = 10  # !more 최대 요청 수
 MAX_PER_SOURCE = 10  # 소스당 최대 수집 수
 
@@ -192,3 +192,45 @@ RSS_NO_FILTER_SOURCES = {
     "80 Level",
     "Game Developer",
 }
+
+# ── 게임 개발 + AI 기사 필수 포함 키워드 ───────────
+# pipeline.py에서 게임 개발 관련 기사를 식별할 때 사용.
+# 제목·설명·키워드에 아래 단어가 포함되면 게임 개발 기사로 간주.
+GAME_DEV_KEYWORDS = [
+    # 영어
+    "ai game",
+    "game ai",
+    "game dev",
+    "gamedev",
+    "game development",
+    "ai 3d modeling",
+    "ai texture",
+    "ai animation",
+    "ai game art",
+    "ai game ui",
+    "ai game design",
+    "ai game asset",
+    "ai sound design",
+    "ai music generation",
+    "ai character design",
+    "ai level design",
+    "procedural generation",
+    "stable diffusion game",
+    "midjourney game",
+    "ai sprite",
+    "ai voxel",
+    "generative ai game",
+    "npc ai",
+    "ai game testing",
+    "unity ai",
+    "unreal ai",
+    "godot ai",
+    # 한국어
+    "ai 게임",
+    "게임 개발 ai",
+    "ai 3d 모델링",
+    "ai 게임 아트",
+    "ai 게임 디자인",
+    "ai 게임 에셋",
+    "ai 애니메이션",
+]
