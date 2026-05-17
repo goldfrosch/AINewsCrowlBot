@@ -125,6 +125,11 @@ _DEFAULT_TOPICS: list[str] = _AGENT_SPEC["default_topics"]
 _SKILL_FINDER: str = _load_skill("article-finder")
 
 
+def get_topic_keys() -> set[str]:
+    """큐레이션 에이전트가 지원하는 토픽 키 집합을 반환한다."""
+    return set(_TOPIC_DESC.keys())
+
+
 # ── 도구 구현 ─────────────────────────────────────────────────────────────────
 
 
@@ -150,22 +155,85 @@ def _tool_analyze_preferences() -> dict:
     }
 
 
-def _tool_find_ai_articles(
-    client: anthropic.Anthropic,
+def build_search_prompt(
     topics: list[str],
     count: int,
     already_collected: set[str],
-) -> dict:
-    """여러 토픽에 걸쳐 최신·고품질 AI 기사를 웹 검색으로 수집한다."""
+    preferences: dict | None = None,
+    intent: dict | None = None,
+) -> str:
+    recency = 48
+    if intent and intent.get("active"):
+        recency = intent.get("recency_hours") or recency
+
     topic_lines = [f"- {t}: {_TOPIC_DESC.get(t, t)}" for t in topics]
 
     exclude_urls = db.get_todays_posted_urls()
     all_excluded = list(set(exclude_urls) | already_collected)
 
     lines = [
-        f"Find {count} high-quality, RECENT (within 48 hours) AI articles from ANY of these topics:",
+        f"Find {count} high-quality, RECENT (within {recency} hours) AI articles from ANY of these topics:",
         "",
         *topic_lines,
+    ]
+
+    if intent and intent.get("active"):
+        lines += [
+            "",
+            "Runtime Editorial Intent:",
+        ]
+        summary = intent.get("summary")
+        if summary:
+            lines.append(summary)
+        focus_areas = intent.get("focus_areas") or []
+        if focus_areas:
+            lines.append("Focus areas:")
+            lines.extend(f"- {item}" for item in focus_areas)
+        boost_topics = intent.get("boost_topics") or []
+        if boost_topics:
+            lines.append("Boost topics:")
+            for topic in boost_topics:
+                lines.append(f"- {topic}: {_TOPIC_DESC.get(topic, topic)}")
+        avoid_topics = intent.get("avoid_topics") or []
+        if avoid_topics:
+            lines.append("Avoid topics:")
+            for topic in avoid_topics:
+                lines.append(f"- {topic}: {_TOPIC_DESC.get(topic, topic)}")
+        focus_keywords = intent.get("focus_keywords") or []
+        if focus_keywords:
+            lines.append(f"Focus keywords: {', '.join(focus_keywords)}")
+        avoid_keywords = intent.get("avoid_keywords") or []
+        if avoid_keywords:
+            lines.append(f"Avoid keywords: {', '.join(avoid_keywords)}")
+        search_hints = intent.get("search_hints") or []
+        if isinstance(search_hints, str):
+            search_hints = [search_hints] if search_hints else []
+        if search_hints:
+            lines.append("Search hints:")
+            lines.extend(f"- {hint}" for hint in search_hints)
+
+    preference_hints = preferences or {}
+    if preference_hints:
+        liked_sources = preference_hints.get("liked_sources") or []
+        disliked_sources = preference_hints.get("disliked_sources") or []
+        liked_keywords = preference_hints.get("liked_keywords") or []
+        skip_keywords = []
+        curation_hints = preference_hints.get("curation_hints") or {}
+        if isinstance(curation_hints, dict):
+            skip_keywords = curation_hints.get("skip_keywords") or []
+
+        if liked_sources or disliked_sources or liked_keywords or skip_keywords:
+            lines += ["", "Learned Preference Hints:"]
+            if liked_sources:
+                lines.append(f"User prefers these sources: {', '.join(liked_sources)}")
+            if disliked_sources:
+                lines.append(f"User avoids these sources: {', '.join(disliked_sources)}")
+            if liked_keywords:
+                lines.append(f"User enjoys these topics: {', '.join(liked_keywords)}")
+            if skip_keywords:
+                lines.append(f"User wants to skip these topics: {', '.join(skip_keywords)}")
+
+    lines += [
         "",
         "Rules:",
         "- Pick the BEST articles regardless of topic distribution — quality and recency first",
@@ -173,16 +241,32 @@ def _tool_find_ai_articles(
         "- Run at most 2 targeted searches, then output JSON",
         "",
     ]
+
     if all_excluded:
         lines.append("Skip these URLs (already collected):")
         for url in all_excluded[:40]:
             lines.append(f"- {url}")
         lines.append("")
+
     lines += [
         f"Output a JSON array of up to {count} items:",
         '[{"url":"...","title":"...","source":"...","description":"2-3 sentences","author":"","published_at":"YYYY-MM-DD","curator_reason":"one sentence"}]',
         "If nothing found: []",
     ]
+
+    return "\n".join(lines)
+
+
+def _tool_find_ai_articles(
+    client: anthropic.Anthropic,
+    topics: list[str],
+    count: int,
+    already_collected: set[str],
+    preferences: dict | None = None,
+    intent: dict | None = None,
+) -> dict:
+    """여러 토픽에 걸쳐 최신·고품질 AI 기사를 웹 검색으로 수집한다."""
+    prompt = build_search_prompt(topics, count, already_collected, preferences, intent)
 
     # article-finder skill을 system prompt에 주입
     finder_system = _SYSTEM_RESEARCH
@@ -197,7 +281,7 @@ def _tool_find_ai_articles(
             max_tokens=2000,
             tools=[{"type": "web_search_20260209", "name": "web_search"}],
             system=finder_system,
-            messages=[{"role": "user", "content": "\n".join(lines)}],
+            messages=[{"role": "user", "content": prompt}],
         ) as stream:
             response = stream.get_final_message()
         token_tracker.log_token_usage(
@@ -222,7 +306,7 @@ def _tool_find_ai_articles(
                 max_tokens=2000,
                 tools=[{"type": "web_search_20260209", "name": "web_search"}],
                 system=finder_system,
-                messages=[{"role": "user", "content": "\n".join(lines)}],
+                messages=[{"role": "user", "content": prompt}],
             ) as stream:
                 response = stream.get_final_message()
             token_tracker.log_token_usage(
@@ -271,6 +355,7 @@ def run(
     target_count: int = 3,
     topics: list[str] | None = None,
     external_preferences: dict | None = None,
+    intent: dict | None = None,
 ) -> list[dict]:
     """
     뉴스 큐레이션 에이전트를 실행한다.
@@ -307,7 +392,14 @@ def run(
     print(f"[Agent] 선호도 분석 → {preferences['summary']}")
 
     # 2단계: 기사 탐색
-    result = _tool_find_ai_articles(client, topics, target_count, set())
+    result = _tool_find_ai_articles(
+        client,
+        topics,
+        target_count,
+        set(),
+        preferences=preferences,
+        intent=intent,
+    )
     articles = result.get("articles", [])
 
     print(f"[Agent] 완료 — {len(articles)}개 선별")
