@@ -2,6 +2,19 @@
 
 from crawlers.base import Article
 
+_INACTIVE_INTENT = {
+    "active": False,
+    "summary": "",
+    "focus_areas": [],
+    "boost_topics": [],
+    "avoid_topics": [],
+    "focus_keywords": [],
+    "avoid_keywords": [],
+    "search_hints": [],
+    "recency_hours": None,
+    "expires_at": None,
+}
+
 
 class TestRunCurationPipeline:
     def test_full_pipeline_mocked(self, mocker, tmp_db):
@@ -29,6 +42,7 @@ class TestRunCurationPipeline:
         ]
         mocker.patch("pipeline.curator.research", return_value=mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
+        mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
         from pipeline import run_curation_pipeline
 
@@ -43,6 +57,7 @@ class TestRunCurationPipeline:
     def test_empty_curator_result(self, mocker, tmp_db):
         mocker.patch("pipeline.curator.research", return_value=[])
         mocker.patch("pipeline.load_preference_profile", return_value=None)
+        mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
         from pipeline import run_curation_pipeline
 
@@ -56,6 +71,7 @@ class TestRunCurationPipeline:
     def test_curator_exception(self, mocker, tmp_db):
         mocker.patch("pipeline.curator.research", side_effect=Exception("API Error"))
         mocker.patch("pipeline.load_preference_profile", return_value=None)
+        mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
         from pipeline import run_curation_pipeline
 
@@ -96,6 +112,7 @@ class TestRunCurationPipeline:
         ]
         mocker.patch("pipeline.curator.research", return_value=mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
+        mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
         from pipeline import run_curation_pipeline
 
@@ -121,6 +138,7 @@ class TestRunCurationPipeline:
         ]
         mocker.patch("pipeline.curator.research", return_value=mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
+        mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
         from pipeline import run_curation_pipeline
 
@@ -147,9 +165,95 @@ class TestRunCurationPipeline:
         ]
         mocker.patch("pipeline.curator.research", return_value=mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
+        mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
         from pipeline import run_curation_pipeline
 
         result = run_curation_pipeline(count=2)
 
         assert len(result["articles"]) == 2
+
+    def test_pipeline_forwards_intent_to_curator(self, mocker, tmp_db):
+        intent = {
+            "active": True,
+            "summary": "test-intent",
+            "focus_areas": ["agentic systems"],
+            "boost_topics": ["multi_agent_orchestration"],
+            "avoid_topics": [],
+            "focus_keywords": ["eval harness"],
+            "avoid_keywords": [],
+            "search_hints": ["prioritize practical guides"],
+            "recency_hours": 48,
+            "expires_at": "2026-05-18T00:00:00Z",
+        }
+        mock_articles = [
+            Article(
+                url="https://example.com/intended",
+                title="Intent Article",
+                source="Test",
+                description="",
+                author="",
+                published_at="",
+                platform_score=100.0,
+                keywords=[],
+            )
+        ]
+        research_mock = mocker.patch("pipeline.curator.research", return_value=mock_articles)
+        mocker.patch("pipeline.load_preference_profile", return_value=None)
+        mocker.patch("pipeline.load_curation_intent", return_value=intent)
+
+        from pipeline import run_curation_pipeline
+
+        run_curation_pipeline(count=1)
+
+        research_mock.assert_called_once()
+        call_kwargs = research_mock.call_args.kwargs
+        assert call_kwargs["intent"] == intent
+
+    def test_pipeline_forwards_both_profile_and_intent(self, mocker, tmp_db):
+        """Active intent AND preference profile should both reach curator.research()."""
+        profile = {
+            "curation_hints": {
+                "boost_sources": ["ArXiv"],
+                "avoid_sources": [],
+                "focus_keywords": ["agent"],
+                "skip_keywords": [],
+            }
+        }
+        intent = {
+            "active": True,
+            "summary": "integration-test-intent",
+            "focus_areas": ["agentic systems"],
+            "boost_topics": ["multi_agent_orchestration"],
+            "avoid_topics": [],
+            "focus_keywords": ["eval"],
+            "avoid_keywords": [],
+            "search_hints": "practical guides",
+            "recency_hours": 48,
+            "expires_at": None,
+        }
+        mock_articles = [
+            Article(
+                url="https://example.com/both",
+                title="Both Profile And Intent",
+                source="Test",
+                description="",
+                author="",
+                published_at="",
+                platform_score=100.0,
+                keywords=[],
+            )
+        ]
+        research_mock = mocker.patch("pipeline.curator.research", return_value=mock_articles)
+        mocker.patch("pipeline.load_preference_profile", return_value=profile)
+        mocker.patch("pipeline.load_curation_intent", return_value=intent)
+
+        from pipeline import run_curation_pipeline
+
+        run_curation_pipeline(count=1)
+
+        research_mock.assert_called_once()
+        call_args = research_mock.call_args
+        assert call_args.kwargs["intent"] == intent
+        # preferences is 3rd positional arg in pipeline.py
+        assert call_args.args[2] == profile

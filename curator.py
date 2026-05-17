@@ -113,27 +113,132 @@ def _is_mocked(obj: object) -> bool:
     return isinstance(obj, Mock)
 
 
-# ─── 폴백: 단순 웹 검색 1회 ──────────────────────────────────────────────────
+def _extract_preference_hints(preferences: dict | None) -> dict:
+    """선호도 profile/legacy shape에서 폴백 프롬프트 힌트를 추출합니다."""
+
+    hints = {
+        "liked_sources": [],
+        "disliked_sources": [],
+        "liked_keywords": [],
+        "skip_keywords": [],
+    }
+
+    if not isinstance(preferences, dict):
+        return hints
+
+    def _append_unique(target: list[str], values: list[str]) -> None:
+        for value in values:
+            if value and value not in target:
+                target.append(value)
+
+    curation_hints = preferences.get("curation_hints")
+    if isinstance(curation_hints, dict):
+        _append_unique(
+            hints["liked_sources"], [str(v).strip() for v in curation_hints.get("boost_sources", []) if str(v).strip()]
+        )
+        _append_unique(
+            hints["disliked_sources"],
+            [str(v).strip() for v in curation_hints.get("avoid_sources", []) if str(v).strip()],
+        )
+        _append_unique(
+            hints["liked_keywords"],
+            [str(v).strip() for v in curation_hints.get("focus_keywords", []) if str(v).strip()],
+        )
+        _append_unique(
+            hints["skip_keywords"], [str(v).strip() for v in curation_hints.get("skip_keywords", []) if str(v).strip()]
+        )
+
+    for item in preferences.get("sources", []) if isinstance(preferences.get("sources", []), list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("source") or "").strip()
+        multiplier = item.get("multiplier")
+        if not name or not isinstance(multiplier, (int, float)):
+            continue
+        if multiplier > 1.1:
+            _append_unique(hints["liked_sources"], [name])
+        elif multiplier < 0.9:
+            _append_unique(hints["disliked_sources"], [name])
+
+    for item in preferences.get("keywords", []) if isinstance(preferences.get("keywords", []), list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("keyword") or "").strip()
+        multiplier = item.get("multiplier")
+        if not name or not isinstance(multiplier, (int, float)):
+            continue
+        if multiplier > 1.1:
+            _append_unique(hints["liked_keywords"], [name])
+        elif multiplier < 0.9:
+            _append_unique(hints["skip_keywords"], [name])
+
+    return hints
 
 
-def _fallback_research(
+def build_fallback_prompt(
     count: int,
     exclude_urls: list[str],
-    preferences: dict,
-) -> list[Article]:
-    """에이전트 실패 시 웹 검색 1회로 기사를 수집합니다."""
-    liked_kws = [k["keyword"] for k in preferences.get("keywords", []) if k["multiplier"] > 1.1][:5]
-    pref_hint = f"\nUser enjoys these topics: {', '.join(liked_kws)}" if liked_kws else ""
+    preferences: dict | None = None,
+    intent: dict | None = None,
+) -> str:
+    """폴백 리서치용 user prompt를 구성합니다."""
+
+    pref_hints = _extract_preference_hints(preferences)
 
     lines = [
         f"Find {count} high-quality articles for developers who build and operate AI systems.",
         "Focus on: multi-agent orchestration, harness engineering for LLMs, AI-assisted complex code modification, prompt engineering, agentic coding workflows.",
-        "NOT general AI news — only content with actionable techniques or concrete examples.",
-        pref_hint,
-        "Requirements: real articles only, no sponsored content, no pure press releases.",
-        "Run 2–4 targeted searches, then output JSON.",
-        "",
     ]
+
+    if isinstance(intent, dict) and intent.get("active"):
+        lines.append("Runtime Editorial Intent:")
+
+        summary = str(intent.get("summary") or "").strip()
+        if summary:
+            lines.append(f"- Summary: {summary}")
+
+        focus_areas = intent.get("focus_areas") if isinstance(intent.get("focus_areas"), list) else []
+        for area in focus_areas:
+            area_text = str(area).strip()
+            if area_text:
+                lines.append(f"- Focus area: {area_text}")
+
+        focus_keywords = intent.get("focus_keywords") if isinstance(intent.get("focus_keywords"), list) else []
+        focus_keywords = [str(item).strip() for item in focus_keywords if str(item).strip()]
+        if focus_keywords:
+            lines.append(f"- Focus keywords: {', '.join(focus_keywords)}")
+
+        avoid_keywords = intent.get("avoid_keywords") if isinstance(intent.get("avoid_keywords"), list) else []
+        avoid_keywords = [str(item).strip() for item in avoid_keywords if str(item).strip()]
+        if avoid_keywords:
+            lines.append(f"- Avoid keywords: {', '.join(avoid_keywords)}")
+
+        search_hints = str(intent.get("search_hints") or "").strip()
+        if search_hints:
+            lines.append(f"- Search hints: {search_hints}")
+
+    pref_lines = []
+    if pref_hints["liked_sources"]:
+        pref_lines.append(f"User prefers these sources: {', '.join(pref_hints['liked_sources'][:5])}")
+    if pref_hints["disliked_sources"]:
+        pref_lines.append(f"User wants to avoid these sources: {', '.join(pref_hints['disliked_sources'][:5])}")
+    if pref_hints["liked_keywords"]:
+        pref_lines.append(f"User wants to focus on these topics: {', '.join(pref_hints['liked_keywords'][:10])}")
+    if pref_hints["skip_keywords"]:
+        pref_lines.append(f"User wants to skip these topics: {', '.join(pref_hints['skip_keywords'][:10])}")
+
+    if pref_lines:
+        lines.append("Learned Preference Hints:")
+        lines.extend(f"- {line}" for line in pref_lines)
+
+    lines.extend(
+        [
+            "NOT general AI news — only content with actionable techniques or concrete examples.",
+            "Requirements: real articles only, no sponsored content, no pure press releases.",
+            "Run 2–4 targeted searches, then output JSON.",
+            "",
+        ]
+    )
 
     if exclude_urls:
         lines.append("Skip these URLs (already posted):")
@@ -148,6 +253,21 @@ def _fallback_research(
         "If nothing found: []",
     ]
 
+    return "\n".join(lines)
+
+
+# ─── 폴백: 단순 웹 검색 1회 ──────────────────────────────────────────────────
+
+
+def _fallback_research(
+    count: int,
+    exclude_urls: list[str],
+    preferences: dict,
+    intent: dict | None = None,
+) -> list[Article]:
+    """에이전트 실패 시 웹 검색 1회로 기사를 수집합니다."""
+    prompt = build_fallback_prompt(count, exclude_urls, preferences, intent)
+
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     try:
@@ -157,7 +277,7 @@ def _fallback_research(
             max_tokens=4000,
             tools=[{"type": "web_search_20260209", "name": "web_search"}],
             system=_SYSTEM_RESEARCH,
-            messages=[{"role": "user", "content": "\n".join(lines)}],
+            messages=[{"role": "user", "content": prompt}],
         ) as stream:
             response = stream.get_final_message()
 
@@ -185,7 +305,7 @@ def _fallback_research(
                 max_tokens=4000,
                 tools=[{"type": "web_search_20260209", "name": "web_search"}],
                 system=_SYSTEM_RESEARCH,
-                messages=[{"role": "user", "content": "\n".join(lines)}],
+                messages=[{"role": "user", "content": prompt}],
             ) as stream:
                 response = stream.get_final_message()
             token_tracker.log_token_usage(
@@ -219,6 +339,7 @@ def research(
     count: int,
     exclude_urls: list[str] | None = None,
     preferences: dict | None = None,
+    intent: dict | None = None,
 ) -> list[Article]:
     """
     뉴스 큐레이션 에이전트로 개발자용 AI 아티클을 수집합니다.
@@ -228,6 +349,7 @@ def research(
         count:        수집할 기사 수
         exclude_urls: 이미 게시된 URL 목록 (에이전트가 DB에서 직접 조회하므로 폴백 전용)
         preferences:  DB 소스/키워드 선호도 (에이전트에 external_preferences로 전달)
+        intent:       큐레이션 의도 (에이전트 및 폴백에 전달)
 
     Returns:
         Article 리스트 (len ≤ count)
@@ -238,7 +360,7 @@ def research(
         raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
 
     try:
-        raw = _agent_run(target_count=count, external_preferences=preferences or {})
+        raw = _agent_run(target_count=count, external_preferences=preferences or {}, intent=intent)
         if raw:
             articles = _to_articles(raw)
             print(f"[Curator] 에이전트 완료: {len(articles)}개 선정")
@@ -253,4 +375,4 @@ def research(
     if not ANTHROPIC_API_KEY and not _is_mocked(anthropic.Anthropic):
         raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
 
-    return _fallback_research(count, exclude_urls or [], preferences or {})
+    return _fallback_research(count, exclude_urls or [], preferences or {}, intent=intent)

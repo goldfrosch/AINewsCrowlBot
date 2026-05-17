@@ -8,6 +8,7 @@ import curator
 import database as db
 from agents.preference_analysis import load_preference_profile
 from config import ARTICLES_PER_POST, GAME_DEV_KEYWORDS
+from curation_intent import load_curation_intent
 from ranker import rank_articles
 
 
@@ -17,6 +18,7 @@ def _is_game_dev_article(article: dict) -> bool:
     if isinstance(keywords, str):
         try:
             import json
+
             keywords = json.loads(keywords)
         except Exception:
             keywords = []
@@ -92,6 +94,12 @@ def run_curation_pipeline(
     if pref_profile:
         print(f"[Pipeline] 선호도 프로파일 로드 — {pref_profile.get('summary', '')}")
 
+    from agents.news_curation_agent import get_topic_keys
+
+    intent = load_curation_intent(valid_topics=get_topic_keys())
+    if intent.get("active"):
+        print(f"[Pipeline] 큐레이션 의도 로드 — {intent.get('summary', '')}")
+
     exclude_urls = db.get_todays_posted_urls()
 
     try:
@@ -99,6 +107,7 @@ def run_curation_pipeline(
             count,
             exclude_urls,
             pref_profile or {},
+            intent=intent,
         )
     except Exception as e:
         print(f"[Pipeline] curator.research() 실패: {e}")
