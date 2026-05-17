@@ -1,0 +1,17 @@
+{
+  "active": true,
+  "summary": "AI를 활용한 게임 개발 사례, 특히 UI/UX/HUD/메뉴 디자인을 우선 수집",
+  "focus_areas": [
+    "AI-powered game UI/UX development case studies",
+    "HUD design",
+    "game menu design",
+    "AI-assisted UI prototyping"
+  ],
+  "boost_topics": ["ai_game_ui_sound", "ai_game_workflow"],
+  "avoid_topics": [],
+  "focus_keywords": ["game UI", "game UX", "HUD", "Unity UI", "Unreal UMG", "Figma AI"],
+  "avoid_keywords": ["generic AI news", "model release", "press release"],
+  "search_hints": "Prioritize practical tutorials, workflows, and case studies showing AI-assisted game UI/UX creation.",
+  "recency_hours": 48,
+  "expires_at": null
+}

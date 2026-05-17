@@ -140,6 +140,7 @@ celerybeat.pid
 
 # Bot data
 data/
+!data/curation_intent.example.json
 .venv
 env/
 venv/
