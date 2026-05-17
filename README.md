@@ -25,6 +25,7 @@ main.py
    │  ├─ news_curation_agent.py  ★ tool-use 기반 agentic loop (메인 큐레이터)
    │  └─ preference_analysis.py  새벽 2시 선호도 심층 분석
    ├─ curator.py                 웹 리서치 엔진 (에이전트 래퍼 + 폴백)
+   ├─ curation_intent.py         런타임 큐레이션 의도 로더
    ├─ ranker.py                  기사 점수 계산 & 피드백 처리
    ├─ database.py                SQLite CRUD (articles, preferences)
    ├─ token_tracker.py           API 토큰 사용량 로깅
@@ -40,6 +41,7 @@ main.py
     └─ DB 피드백 읽기 → 선호 소스/키워드 프로파일 생성 → data/preference_profile.json 저장
 
 [06:00 KST] 뉴스 큐레이션 에이전트 (curator.py)
+    ├─ data/preference_profile.json + data/curation_intent.json 로드
     ├─ 에이전트 모드: 3단계 agentic loop → 기사 선별 (기본)
     ├─ 폴백 모드: 에이전트 실패 시 웹 검색 1회로 기사 수집
     └─ Discord 게시 (임베드 + 👍/👎 반응 자동 추가)
@@ -120,6 +122,8 @@ python main.py
 
 각 기사 임베드에 달린 👍/👎 반응을 누르면 Claude의 리서치 방향이 취향에 맞게 조정된다.
 
+> **참고**: 큐레이션 의도를 Discord 명령어로 변경하는 기능(`!intent` 등)은 현재 구현되지 않았습니다. 큐레이션 우선순위를 변경하려면 `data/curation_intent.json` 파일을 직접 수정하세요.
+
 ---
 
 ## 데이터베이스
@@ -131,6 +135,85 @@ python main.py
 | `articles` | 수집된 기사 (URL 기준 중복 방지, 게시 상태·반응 수 포함) |
 | `source_preferences` | 소스별 선호도 배율 (👍/👎 누적) |
 | `keyword_preferences` | 키워드별 선호도 배율 (👍/👎 누적) |
+
+---
+
+## 런타임 설정 파일
+
+`data/` 디렉토리에 큐레이션 동작을 제어하는 JSON 파일이 위치한다.
+
+### `data/curation_intent.json` — 사용자 편집 가능
+
+**임시 편집 방향(editorial intent)**을 지정하는 런타임 설정 파일.
+코드 수정 없이 크롤링·검색 우선순위를 일시적으로 조정할 수 있다.
+예: "이번 주는 게임 UI 관련 기사 위주로" 또는 "한국어 실무 아티클에 집중".
+
+#### 활성화 방법
+
+```bash
+cp data/curation_intent.example.json data/curation_intent.json
+# curation_intent.json에서 "active": true로 설정
+```
+
+`active`를 `false`로 두거나 파일을 삭제하면 즉시 비활성화된다.
+
+#### 스키마
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `active` | bool | `true`면 의도 적용, `false`면 무시 |
+| `summary` | string | 의도 요약 (프롬프트에 삽입됨) |
+| `focus_areas` | string[] | 집중할 주제 영역 설명 |
+| `boost_topics` | string[] | 우선 탐색할 토픽 키 ([에이전트 토픽 목록](#큐레이션-파이프라인) 참조) |
+| `avoid_topics` | string[] | 제외할 토픽 키 |
+| `focus_keywords` | string[] | 검색 시 가중할 키워드 |
+| `avoid_keywords` | string[] | 검색 시 제외할 키워드 |
+| `search_hints` | string | 검색 전략에 대한 자유 텍스트 힌트 |
+| `recency_hours` | int | 최근 N시간 이내 기사만 수집 (기본값: 48) |
+| `expires_at` | string\|null | 만료 시각 (ISO 8601). null이면 무기한 |
+
+#### 예시
+
+```json
+{
+  "active": true,
+  "summary": "AI를 활용한 게임 개발 사례, 특히 UI/UX/HUD/메뉴 디자인을 우선 수집",
+  "focus_areas": [
+    "AI-powered game UI/UX development case studies",
+    "HUD design",
+    "game menu design",
+    "AI-assisted UI prototyping"
+  ],
+  "boost_topics": ["ai_game_ui_sound", "ai_game_workflow"],
+  "avoid_topics": [],
+  "focus_keywords": ["game UI", "game UX", "HUD", "Unity UI", "Unreal UMG", "Figma AI"],
+  "avoid_keywords": ["generic AI news", "model release", "press release"],
+  "search_hints": "Prioritize practical tutorials, workflows, and case studies showing AI-assisted game UI/UX creation.",
+  "recency_hours": 48,
+  "expires_at": null
+}
+```
+
+> 전체 예시는 [`data/curation_intent.example.json`](data/curation_intent.example.json)을 참조.
+
+### `data/preference_profile.json` — 자동 생성 (수동 편집 금지)
+
+사용자의 👍/👎 반응 데이터를 **자동 분석**하여 생성되는 장기 선호도 프로파일.
+
+- **생성 시점**: 매일 02:00 KST 자동 분석, 또는 `!analyze` 관리자 명령어
+- **내용**: 신뢰도 필터링된 소스/키워드 티어, 큐레이션 힌트
+- **주의**: 이 파일은 분석 작업이 덮어씁니다. **임시로 큐레이션 방향을 바꾸려면 이 파일이 아닌 `curation_intent.json`을 사용하세요.**
+
+### 두 파일의 관계
+
+```
+curation_intent.json   = 일시적·사용자 제어 편집 방향 (수동 편집)
+preference_profile.json = 영구적·피드백 학습 선호도 (자동 생성)
+
+        ↓ 병합 ↓
+  큐레이션 검색 프롬프트에 함께 주입
+  (정적 안전 규칙 > 사용자 의도 > 학습된 선호도 순 우선순위)
+```
 
 ---
 
