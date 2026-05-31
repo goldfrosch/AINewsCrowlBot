@@ -278,8 +278,8 @@ def _tool_find_ai_articles(
         _t0 = time.perf_counter()
         with client.messages.stream(
             model=CLAUDE_MODEL,
-            max_tokens=2000,
-            tools=[{"type": "web_search_20260209", "name": "web_search"}],
+            max_tokens=1200,
+            tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
             system=finder_system,
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
@@ -303,8 +303,8 @@ def _tool_find_ai_articles(
             _t0 = time.perf_counter()
             with client.messages.stream(
                 model=CLAUDE_MODEL,
-                max_tokens=2000,
-                tools=[{"type": "web_search_20260209", "name": "web_search"}],
+                max_tokens=1200,
+                tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
                 system=finder_system,
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:

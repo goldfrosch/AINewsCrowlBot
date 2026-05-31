@@ -31,7 +31,7 @@ Rules:
 - Articles should contain concrete techniques, code examples, or measurable insights
 - No sponsored content, generic AI hype, or press releases
 - No pure news about model releases unless it directly affects developer workflow
-- 2–4 targeted searches, then output JSON immediately
+- Run at most 2 targeted searches, then output JSON immediately
 - If nothing relevant found, output an empty array []
 - Output ONLY valid JSON — no preamble, no explanation"""
 
@@ -235,7 +235,7 @@ def build_fallback_prompt(
         [
             "NOT general AI news — only content with actionable techniques or concrete examples.",
             "Requirements: real articles only, no sponsored content, no pure press releases.",
-            "Run 2–4 targeted searches, then output JSON.",
+            "Run at most 2 targeted searches, then output JSON.",
             "",
         ]
     )
@@ -274,8 +274,8 @@ def _fallback_research(
         _t0 = time.perf_counter()
         with client.messages.stream(
             model=CLAUDE_MODEL,
-            max_tokens=4000,
-            tools=[{"type": "web_search_20260209", "name": "web_search"}],
+            max_tokens=1500,
+            tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
             system=_SYSTEM_RESEARCH,
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
@@ -302,8 +302,8 @@ def _fallback_research(
             _t0 = time.perf_counter()
             with client.messages.stream(
                 model=CLAUDE_MODEL,
-                max_tokens=4000,
-                tools=[{"type": "web_search_20260209", "name": "web_search"}],
+                max_tokens=1500,
+                tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
                 system=_SYSTEM_RESEARCH,
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:
