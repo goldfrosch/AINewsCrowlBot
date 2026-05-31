@@ -244,7 +244,7 @@ def build_search_prompt(
 
     if all_excluded:
         lines.append("Skip these URLs (already collected):")
-        for url in all_excluded[:40]:
+        for url in all_excluded[:20]:
             lines.append(f"- {url}")
         lines.append("")
 
@@ -273,6 +273,10 @@ def _tool_find_ai_articles(
     if _SKILL_FINDER:
         finder_system = f"{_SYSTEM_RESEARCH}\n\n---\n\n{_SKILL_FINDER}"
 
+    # system 프롬프트는 매 호출 동일하므로 prompt caching으로 입력 토큰 절감.
+    # 30초 후 재시도(RateLimit) 시 캐시 TTL(5분) 내라 캐시 히트 → input 토큰 ~90% 할인.
+    finder_system_blocks = [{"type": "text", "text": finder_system, "cache_control": {"type": "ephemeral"}}]
+
     raw_articles: list[dict] = []
     try:
         _t0 = time.perf_counter()
@@ -280,7 +284,7 @@ def _tool_find_ai_articles(
             model=CLAUDE_MODEL,
             max_tokens=1200,
             tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
-            system=finder_system,
+            system=finder_system_blocks,
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
             response = stream.get_final_message()
@@ -305,7 +309,7 @@ def _tool_find_ai_articles(
                 model=CLAUDE_MODEL,
                 max_tokens=1200,
                 tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
-                system=finder_system,
+                system=finder_system_blocks,
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:
                 response = stream.get_final_message()

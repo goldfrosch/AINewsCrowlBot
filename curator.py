@@ -35,6 +35,10 @@ Rules:
 - If nothing relevant found, output an empty array []
 - Output ONLY valid JSON — no preamble, no explanation"""
 
+# system 프롬프트는 매 호출 동일하므로 prompt caching으로 입력 토큰 절감.
+# 30초 후 재시도(RateLimit) 시 캐시 TTL(5분) 내라 캐시 히트 → input 토큰 ~90% 할인.
+_SYSTEM_RESEARCH_BLOCKS = [{"type": "text", "text": _SYSTEM_RESEARCH, "cache_control": {"type": "ephemeral"}}]
+
 
 # ─── 유틸리티 ────────────────────────────────────────────────────────────────
 
@@ -242,7 +246,7 @@ def build_fallback_prompt(
 
     if exclude_urls:
         lines.append("Skip these URLs (already posted):")
-        for url in exclude_urls[:40]:
+        for url in exclude_urls[:20]:
             lines.append(f"- {url}")
         lines.append("")
 
@@ -276,7 +280,7 @@ def _fallback_research(
             model=CLAUDE_MODEL,
             max_tokens=1500,
             tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
-            system=_SYSTEM_RESEARCH,
+            system=_SYSTEM_RESEARCH_BLOCKS,
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
             response = stream.get_final_message()
@@ -304,7 +308,7 @@ def _fallback_research(
                 model=CLAUDE_MODEL,
                 max_tokens=1500,
                 tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
-                system=_SYSTEM_RESEARCH,
+                system=_SYSTEM_RESEARCH_BLOCKS,
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:
                 response = stream.get_final_message()
