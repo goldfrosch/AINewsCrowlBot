@@ -2,45 +2,98 @@
 
 ## Project Overview
 
-**AINewsCrawlBot** — 매일 새벽 3시(KST)에 AI 뉴스·논문·영상을 크롤링해 Discord에 자동 게시하는 봇.
+**AINewsCrawlBot** — 매일 02:00 KST에 선호도를 분석하고 06:00 KST에 AI 아티클을 Discord에 자동 게시하는 봇.
 사용자의 👍/👎 반응을 학습해 다음 날 브리핑의 소스·키워드 가중치를 조정한다.
 
 ## Tech Stack
 
 - Python 3.11+ / pip / SQLite (`data/bot.db`)
-- discord.py 2.x · Anthropic SDK · Claude Opus 4.6 + `web_search_20260209`
+- discord.py 2.x · Anthropic SDK · `web_search_20260209` (기본 모델 `claude-sonnet-4-6`)
+- feedparser / requests — HN·RSS 후보풀
 
 ## File Map
 
 ```
 main.py          진입점
 bot.py           Discord 봇 (이벤트·스케줄·커맨드)
+pipeline.py      큐레이션 파이프라인 (Discord 무의존)
+curator.py       Claude 리서치 엔진 (에이전트 래퍼 + 폴백)
+claude_search.py Claude 웹 검색 공용 레이어 (stop_reason·pause_turn·재시도)
+recency.py       발행일 파싱 / 신선도 컷오프 / 랭킹 배율
+text_utils.py    JSON 배열 추출 (단일 구현)
 ranker.py        기사 점수 계산 & 피드백 처리
 database.py      SQLite CRUD
 config.py        환경변수 & 전역 상수
-crawlers/        폴백 크롤러 (ANTHROPIC_API_KEY 없을 때)
+curation_intent.py  런타임 큐레이션 의도 로더
+crawlers/
+  base.py        Article 데이터클래스
+  hackernews.py  HN Algolia search_by_date 후보 수집
+  rss.py         RSS_FEEDS 파싱 + AI 키워드 필터
+  feed_pool.py   HN+RSS 병합·티어링·신선도 필터 (2번째 수집 경로)
 agents/
-  news_curation_agent.py  ★ tool-use 기반 독립 큐레이션 에이전트
+  agent_spec.py           .claude 문서에서 토픽·스킬 로드
+  search_prompt.py        탐색 프롬프트 구성 (날짜 주입)
+  news_curation_agent.py  ★ 오버페치 + 톱업 루프 큐레이션 에이전트
+  preference_analysis.py  02:00 선호도 심층 분석
 ```
 
 ## Dev Commands
 
 ```bash
 pip install -r requirements.txt
-python main.py
+python main.py                          # 봇 실행
+python dry_run.py --count 3 --verbose   # Discord 없이 파이프라인 실행
+python -m pytest -q                     # 테스트
+python -m ruff check --fix . && python -m ruff format .
 ```
+
+`dry_run.py`는 기본적으로 `data/bot.db`에 씁니다. 실험할 때는 `--db`로 임시 경로를 지정하세요.
 
 ## Environment Variables
 
 필수: `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID`
-권장: `ANTHROPIC_API_KEY` (없으면 크롤러 폴백)
-선택: `YOUTUBE_API_KEY`, `REDDIT_CLIENT_ID/SECRET`, `THREADS_ACCESS_TOKEN`
+권장: `ANTHROPIC_API_KEY` (없거나 크레딧 소진 시 HN/RSS 후보풀로 자동 폴백)
+선택: `CLAUDE_MODEL`, `ALLOWED_USER_IDS`
+
+## 수집 파이프라인
+
+```
+1. curator.research()   Claude 웹 검색 — 목표 N개면 N×4개 요청, 부족하면 최대 2회 톱업 재검색
+2. 신선도 컷오프         published_at이 RECENCY_MAX_AGE_DAYS(7일)를 넘기면 폐기
+                        발행일 미상은 통과시키되 랭킹에서 감점
+3. crawlers.feed_pool   1·2번 결과가 목표 미달일 때 HN(30점 이상)·RSS로 보충
+```
+
+수집 경로가 2개라 한쪽이 완전히 죽어도(예: API 크레딧 소진) 브리핑이 0건이 되지 않는다.
+
+## 신선도 정책 (중요)
+
+`web_search` 도구에는 날짜/기간 필터 파라미터가 **존재하지 않는다**. 그래서 2단으로 강제한다.
+
+1. 프롬프트에 **오늘 날짜와 컷오프 날짜를 명시**한다 (`recency.prompt_lines()`).
+   모델은 오늘이 며칠인지 모르므로 `"within 48 hours"` 같은 지시만으로는 무의미하다.
+2. 반환된 `published_at`을 코드에서 다시 검증한다 (`recency.is_stale()`).
+   미래 날짜는 파싱 불가로 취급해 위조를 막는다.
 
 ## Ranking Formula
 
-`final_score = normalize(platform_score) × source_multiplier × avg(keyword_multipliers)`
+`final_score = normalize(platform_score) × source_multiplier × avg(keyword_multipliers) × recency_multiplier`
 
-👍 → source +0.15 / keyword +0.05 · 👎 → source -0.15 / keyword -0.05 · 범위 0.1~5.0
+- `platform_score`는 모든 프로듀서가 0~100 밴드로 emit한다 (소스별 상한 없음)
+- `recency_multiplier`: 1일 이내 1.6 / 3일 1.35 / 7일 1.15 / 발행일 미상 0.85 / 30일 초과 0.5
+- 👍 → source +0.15 / keyword +0.05 · 👎 → source -0.15 / keyword -0.05 · 범위 0.1~5.0
+- 키워드는 `canonical_keyword()`로 정규화해 저장한다 (`"ai agent"` → `"ai_agent"`)
+
+## 주요 튜닝 상수 (config.py)
+
+| 상수 | 기본값 | 의미 |
+|------|--------|------|
+| `RECENCY_MAX_AGE_DAYS` | 7 | 신선도 컷오프 |
+| `OVERFETCH_MULTIPLIER` | 4 | 목표 대비 요청 배수 |
+| `TOPUP_MAX_ROUNDS` | 2 | 목표 미달 시 추가 검색 횟수 |
+| `SEARCH_MAX_TOKENS` | 4096 | 서버사이드 검색 블록이 출력 예산을 잠식하므로 여유 필요 |
+| `EXCLUDE_URL_LOOKBACK_DAYS` | 45 | 중복 회피용 게시 이력 조회 기간 |
+| `FEED_MAX_PER_SOURCE` | 2 | 후보풀 소스별 상한 |
 
 ## Skills
 

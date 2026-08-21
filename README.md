@@ -8,10 +8,11 @@
 ## 주요 기능
 
 - **자동 브리핑** — 매일 06:00 KST에 AI 뉴스 상위 3개를 Discord 채널에 게시 (게임 개발+AI 기사 최소 1개 포함)
-- **Claude 웹 리서치** — `web_search_20260209` tool-use로 최신 기사를 실시간 탐색
+- **신선도 강제** — 발행일이 7일을 넘긴 기사는 코드에서 폐기. 프롬프트에 오늘 날짜를 주입해 모델이 최신 기사를 찾도록 유도
+- **이중 수집 경로** — Claude 웹 검색이 실패하거나 목표 수량에 미달하면 HackerNews·RSS 후보풀로 자동 보충
+- **수량 보장** — 목표 대비 4배 오버페치 + 최대 2회 톱업 재검색으로 중복·기한초과 손실을 흡수
 - **선호도 학습** — 👍/👎 반응 누적 → 소스·키워드 배율 자동 조정
 - **새벽 선호도 분석** — 02:00 KST에 DB 데이터를 심층 분석해 큐레이션 힌트 생성
-- **에이전트 큐레이션** — 3단계 agentic loop(선호도 분석 → 기사 탐색 → 품질 검토)
 - **토큰 사용량 추적** — Anthropic API 호출 비용을 일별/5시간 윈도우별로 모니터링
 
 ---
@@ -21,17 +22,24 @@
 ```
 main.py
 └─ bot.py                      Discord 봇 (이벤트·스케줄·커맨드)
-   ├─ agents/
-   │  ├─ news_curation_agent.py  ★ tool-use 기반 agentic loop (메인 큐레이터)
-   │  └─ preference_analysis.py  새벽 2시 선호도 심층 분석
-   ├─ curator.py                 웹 리서치 엔진 (에이전트 래퍼 + 폴백)
-   ├─ curation_intent.py         런타임 큐레이션 의도 로더
-   ├─ ranker.py                  기사 점수 계산 & 피드백 처리
-   ├─ database.py                SQLite CRUD (articles, preferences)
-   ├─ token_tracker.py           API 토큰 사용량 로깅
-   ├─ crawlers/
-   │  └─ base.py                 Article 데이터클래스
-   └─ config.py                  환경변수 & 전역 상수
+   └─ pipeline.py              큐레이션 파이프라인 (Discord 무의존)
+      ├─ curator.py            Claude 리서치 엔진 (에이전트 래퍼 + 폴백)
+      │  └─ claude_search.py   웹 검색 공용 레이어 (stop_reason·pause_turn·재시도)
+      ├─ agents/
+      │  ├─ news_curation_agent.py  ★ 오버페치 + 톱업 루프 큐레이터
+      │  ├─ search_prompt.py        탐색 프롬프트 (오늘 날짜·컷오프 주입)
+      │  ├─ agent_spec.py           .claude 문서에서 토픽·스킬 로드
+      │  └─ preference_analysis.py  02:00 선호도 심층 분석
+      ├─ crawlers/
+      │  ├─ feed_pool.py       HN+RSS 병합·티어링·신선도 필터 (2번째 경로)
+      │  ├─ hackernews.py      HN Algolia search_by_date
+      │  ├─ rss.py             RSS_FEEDS 파싱 + AI 키워드 필터
+      │  └─ base.py            Article 데이터클래스
+      ├─ recency.py            발행일 파싱 / 신선도 컷오프 / 랭킹 배율
+      ├─ ranker.py             기사 점수 계산 & 피드백 처리
+      ├─ database.py           SQLite CRUD (articles, keywords, preferences)
+      ├─ token_tracker.py      API 토큰 사용량 로깅
+      └─ config.py             환경변수 & 전역 상수
 ```
 
 ### 큐레이션 파이프라인
@@ -40,24 +48,50 @@ main.py
 [02:00 KST] 선호도 분석 에이전트
     └─ DB 피드백 읽기 → 선호 소스/키워드 프로파일 생성 → data/preference_profile.json 저장
 
-[06:00 KST] 뉴스 큐레이션 에이전트 (curator.py)
-    ├─ data/preference_profile.json + data/curation_intent.json 로드
-    ├─ 에이전트 모드: 3단계 agentic loop → 기사 선별 (기본)
-    ├─ 폴백 모드: 에이전트 실패 시 웹 검색 1회로 기사 수집
-    └─ Discord 게시 (임베드 + 👍/👎 반응 자동 추가)
+[06:00 KST] 뉴스 브리핑
+    1. data/preference_profile.json + data/curation_intent.json 로드
+    2. 최근 45일 게시 URL을 제외 목록으로 전달 (중복 재추천 차단)
+    3. Claude 웹 검색 — 목표 3개면 12개 요청, 부족하면 토픽을 회전시켜 최대 2회 재검색
+    4. 신선도 컷오프 — published_at이 7일을 넘긴 기사 폐기
+    5. 목표 미달이면 HN(30점 이상)·RSS 후보풀로 보충
+    6. 랭킹 → Discord 게시 (임베드 + 👍/👎 반응 자동 추가)
 ```
+
+수집 경로가 2개이므로 한쪽이 완전히 죽어도(예: Anthropic 크레딧 소진) 브리핑이 0건이 되지 않는다.
+
+### 신선도 정책
+
+`web_search` 도구에는 날짜/기간 필터 파라미터가 **존재하지 않는다**. 그래서 2단으로 강제한다.
+
+1. **프롬프트에 오늘 날짜와 컷오프 날짜를 명시** — 모델은 오늘이 며칠인지 모르므로
+   `"within 48 hours"` 같은 지시만으로는 아무 효과가 없다.
+2. **반환된 `published_at`을 코드에서 재검증** — 미래 날짜는 파싱 불가로 취급해 위조를 막는다.
+   발행일 미상은 폐기하지 않고 통과시키되 랭킹에서 감점한다(전부 버리면 0건 문제가 재발한다).
 
 ### 랭킹 공식
 
 ```
-final_score = normalize(platform_score) × source_multiplier × avg(keyword_multipliers)
+final_score = normalize(platform_score) × source_multiplier × avg(keyword_multipliers) × recency_multiplier
 ```
 
 | 요소 | 설명 | 범위 |
 |------|------|------|
-| `platform_score` | 소스별 원점수(조회수, 업보트 등)를 0~1 정규화 | 0.0 ~ 1.0 |
+| `platform_score` | 모든 프로듀서가 0~100 밴드로 emit → 0~1 정규화 | 0.0 ~ 1.0 |
 | `source_multiplier` | 👍 +0.15 / 👎 -0.15 | 0.1 ~ 5.0 |
-| `keyword_multiplier` | 제목·설명 내 AI 키워드 배율의 평균. 👍 +0.05 / 👎 -0.05 | 0.1 ~ 5.0 |
+| `keyword_multiplier` | 기사 키워드 배율의 평균. 👍 +0.05 / 👎 -0.05 | 0.1 ~ 5.0 |
+| `recency_multiplier` | 1일 이내 1.6 / 3일 1.35 / 7일 1.15 / 발행일 미상 0.85 / 30일 초과 0.5 | 0.5 ~ 1.6 |
+
+### 주요 튜닝 상수 (`config.py`)
+
+| 상수 | 기본값 | 의미 |
+|------|--------|------|
+| `RECENCY_MAX_AGE_DAYS` | 7 | 신선도 컷오프 |
+| `OVERFETCH_MULTIPLIER` | 4 | 목표 대비 요청 배수 |
+| `TOPUP_MAX_ROUNDS` | 2 | 목표 미달 시 추가 검색 횟수 |
+| `SEARCH_MAX_TOKENS` | 4096 | 서버사이드 검색 블록이 출력 예산을 잠식하므로 여유 필요 |
+| `EXCLUDE_URL_LOOKBACK_DAYS` | 45 | 중복 회피용 게시 이력 조회 기간 |
+| `HN_MIN_POINTS` | 30 | HN 후보 최소 점수 |
+| `FEED_MAX_PER_SOURCE` | 2 | 후보풀 소스별 상한 (발행량 많은 피드의 독식 방지) |
 
 ---
 
@@ -78,33 +112,33 @@ pip install -r requirements.txt
 DISCORD_BOT_TOKEN=봇_토큰
 DISCORD_CHANNEL_ID=채널_ID
 
-# 권장 (없으면 크롤러 폴백)
+# 권장 (없거나 크레딧이 소진되면 HN/RSS 후보풀로 자동 폴백)
 ANTHROPIC_API_KEY=클로드_API_키
 
 # 선택
 CLAUDE_MODEL=claude-sonnet-4-6
 ALLOWED_USER_IDS=123456789,987654321   # 관리자 명령어 허용 유저 ID
-
-# 크롤러 폴백용 (ANTHROPIC_API_KEY 없을 때)
-YOUTUBE_API_KEY=
-REDDIT_CLIENT_ID=
-REDDIT_CLIENT_SECRET=
-THREADS_ACCESS_TOKEN=
 ```
 
 | 변수 | 필수 여부 | 설명 |
 |------|-----------|------|
 | `DISCORD_BOT_TOKEN` | 필수 | Discord Developer Portal에서 발급 |
 | `DISCORD_CHANNEL_ID` | 필수 | 뉴스를 게시할 채널의 ID |
-| `ANTHROPIC_API_KEY` | 권장 | Claude 웹 리서치 활성화. 없으면 RSS/Reddit 크롤러로 폴백 |
+| `ANTHROPIC_API_KEY` | 권장 | Claude 웹 리서치 활성화. 없으면 HN/RSS 후보풀만으로 동작 |
 | `CLAUDE_MODEL` | 선택 | 기본값 `claude-sonnet-4-6` |
 | `ALLOWED_USER_IDS` | 선택 | 관리자 명령어를 허용할 유저 ID (쉼표 구분) |
+
+> `config.py`의 `YOUTUBE_API_KEY`, `REDDIT_CLIENT_ID/SECRET`, `THREADS_ACCESS_TOKEN`은
+> 현재 어떤 코드도 참조하지 않습니다. 설정하지 않아도 됩니다.
 
 ### 3. 실행
 
 ```bash
-python main.py
+python main.py                          # 봇 실행
+python dry_run.py --count 3 --verbose   # Discord 없이 파이프라인만 실행
 ```
+
+`dry_run.py`는 기본적으로 `data/bot.db`에 씁니다. 실험할 때는 `--db data/tmp.db`로 임시 경로를 쓰세요.
 
 ---
 
@@ -250,5 +284,18 @@ python agents/news_curation_agent.py --count 10 --topics models,dev_tools,korean
 - **discord.py 2.x** — Discord 봇 프레임워크
 - **Anthropic SDK** — Claude API (`web_search_20260209` tool-use)
 - **SQLite** — 기사 저장 및 선호도 관리
-- **feedparser / BeautifulSoup4** — RSS 크롤러 폴백
+- **feedparser / requests** — HackerNews·RSS 후보풀
 - **PyYAML** — 에이전트 설정 파일 파싱
+
+---
+
+## 개발
+
+```bash
+python -m pytest -q                                # 테스트 (186개)
+python -m ruff check --fix . && python -m ruff format .
+```
+
+테스트는 `tests/conftest.py`의 autouse fixture로 임시 SQLite에 격리되므로
+`data/bot.db`나 `data/token_usage.db`를 건드리지 않습니다.
+`tests/test_pipeline.py`는 `pipeline.feed_pool.collect`를 모킹해 네트워크를 타지 않습니다.
