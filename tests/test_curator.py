@@ -1,5 +1,7 @@
 """curator.py 단위 테스트"""
 
+import json
+
 from curator import _extract_json_array, _to_articles, build_fallback_prompt
 
 
@@ -23,10 +25,19 @@ class TestExtractJsonArray:
         assert _extract_json_array("[{broken") == []
 
     def test_nested_arrays(self):
+        """중첩 keywords 배열을 바깥 배열로 오인하지 않아야 한다 (rfind 버그 회귀 방지)."""
         text = '[{"url":"a","title":"b","keywords":["k1","k2"]}]'
         result = _extract_json_array(text)
-        # rfind("[") finds innermost [ so returns inner array
-        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["url"] == "a"
+        assert result[0]["keywords"] == ["k1", "k2"]
+
+    def test_bracket_inside_description(self):
+        """description에 '['가 있어도 바깥 배열을 정확히 잡아야 한다."""
+        text = '[{"url":"a","title":"t","description":"see [docs] here"}]'
+        result = _extract_json_array(text)
+        assert len(result) == 1
+        assert result[0]["url"] == "a"
 
     def test_multiple_items(self):
         text = '[{"url":"a","title":"A"},{"url":"b","title":"B"},{"url":"c","title":"C"}]'
@@ -93,15 +104,15 @@ class TestToArticles:
 class TestResearch:
     def _run_fallback(self, mocker, preferences, intent=None):
         mocker.patch("agents.news_curation_agent.run", side_effect=Exception("Agent failed"))
-        mock_data = [
-            {"url": "https://example.com/fallback", "title": "Fallback", "source": "Test"},
-        ]
-        mocker.patch("curator._extract_json_array", return_value=mock_data)
+        # 응답 텍스트에 실제 JSON을 넣는다.
+        # (JSON 추출은 text_utils로 단일화되어 curator._extract_json_array 패치가 무효)
+        mock_json = json.dumps([{"url": "https://example.com/fallback", "title": "Fallback", "source": "Test"}])
 
         mock_usage = mocker.MagicMock(input_tokens=100, output_tokens=50)
         mock_response = mocker.MagicMock()
-        mock_response.content = [mocker.MagicMock(type="text", text="irrelevant")]
+        mock_response.content = [mocker.MagicMock(type="text", text=mock_json)]
         mock_response.usage = mock_usage
+        mock_response.stop_reason = "end_turn"
 
         mock_stream = mocker.MagicMock()
         mock_stream.__enter__ = mocker.MagicMock(return_value=mock_stream)

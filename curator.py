@@ -7,33 +7,33 @@ Claude 기반 AI 뉴스 큐레이션 엔진
   2. 실패 시 단순 웹 검색 1회 폴백
 """
 
-import json
-import time
 from unittest.mock import Mock
 
 import anthropic
 
-import token_tracker
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+import claude_search
+import recency
+from config import ANTHROPIC_API_KEY, EXCLUDE_URL_PROMPT_LIMIT, WEB_SEARCH_MAX_USES
 from crawlers.base import Article
+from text_utils import extract_json_array
 
 # ─── 시스템 프롬프트 (폴백용) ──────────────────────────────────────────────────
 
 _SYSTEM_RESEARCH = """\
-You are a focused researcher finding high-quality articles for developers who build and operate AI systems.
-Your task is to find practical, actionable content — NOT general AI news.
+You are a focused researcher finding RECENT, high-quality articles for developers who build and operate
+AI systems. Your task is to find practical, actionable content — NOT general AI news.
 
 Target reader: software engineer working on agentic systems, multi-agent orchestration,
 AI-assisted code modification, or LLM infrastructure and evaluation harnesses.
 
-Rules:
-- Prioritize tutorials, how-to guides, best practices, and case studies over news
-- Articles should contain concrete techniques, code examples, or measurable insights
-- No sponsored content, generic AI hype, or press releases
-- No pure news about model releases unless it directly affects developer workflow
-- Run at most 2 targeted searches, then output JSON immediately
-- If nothing relevant found, output an empty array []
-- Output ONLY valid JSON — no preamble, no explanation"""
+Rules, in priority order:
+1. RECENCY IS A HARD GATE. The user prompt states today's date and a cutoff date. Articles published
+   before the cutoff must not be returned, regardless of quality.
+2. Every article needs a verifiable publication date. If you cannot establish one, drop the article.
+   Never guess a date and never report today's date for an undated page.
+3. Within the window, prefer tutorials, how-to guides, and case studies with concrete techniques.
+4. No sponsored content, no press releases, no undated evergreen SEO pages.
+5. Output ONLY valid JSON — no preamble, no explanation. If nothing qualifies, output []."""
 
 # system 프롬프트는 매 호출 동일하므로 prompt caching으로 입력 토큰 절감.
 # 30초 후 재시도(RateLimit) 시 캐시 TTL(5분) 내라 캐시 히트 → input 토큰 ~90% 할인.
@@ -43,42 +43,9 @@ _SYSTEM_RESEARCH_BLOCKS = [{"type": "text", "text": _SYSTEM_RESEARCH, "cache_con
 # ─── 유틸리티 ────────────────────────────────────────────────────────────────
 
 
-def _extract_json_array(text: str) -> list[dict]:
-    """응답 텍스트에서 바깥 JSON 배열을 추출합니다.
-
-    '['부터 브래킷 매칭하여 유효한 바깥 배열 후보를 모두 찾고,
-    모델 응답 끝부분의 최종 JSON 배열을 우선 사용합니다.
-    """
-    pos = 0
-    candidates: list[list[dict]] = []
-    while True:
-        start = text.find("[", pos)
-        if start == -1:
-            return candidates[-1] if candidates else []
-
-        depth = 0
-        end = -1
-        for i, ch in enumerate(text[start:], start):
-            if ch == "[":
-                depth += 1
-            elif ch == "]":
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-
-        if end == -1:
-            pos = start + 1
-            continue
-
-        try:
-            result = json.loads(text[start:end])
-            if isinstance(result, list) and (not result or isinstance(result[0], dict)):
-                candidates.append(result)
-        except json.JSONDecodeError:
-            pass
-
-        pos = start + 1
+# 구현은 text_utils로 이전했다. agents 쪽에 있던 rfind 기반 중복 구현이
+# description 내 '['나 중첩 keywords 배열에서 오작동했기 때문에 단일화했다.
+_extract_json_array = extract_json_array
 
 
 def _to_articles(data: list[dict]) -> list[Article]:
@@ -188,8 +155,10 @@ def build_fallback_prompt(
     """폴백 리서치용 user prompt를 구성합니다."""
 
     pref_hints = _extract_preference_hints(preferences)
+    max_age_days = recency.max_age_from_intent(intent)
 
-    lines = [
+    lines = recency.prompt_lines(max_age_days)
+    lines += [
         f"Find {count} high-quality articles for developers who build and operate AI systems.",
         "Focus on: multi-agent orchestration, harness engineering for LLMs, AI-assisted complex code modification, prompt engineering, agentic coding workflows.",
     ]
@@ -239,14 +208,15 @@ def build_fallback_prompt(
         [
             "NOT general AI news — only content with actionable techniques or concrete examples.",
             "Requirements: real articles only, no sponsored content, no pure press releases.",
-            "Run at most 2 targeted searches, then output JSON.",
+            '"published_at" MUST be the real publication date (YYYY-MM-DD). If you cannot verify it, omit the article.',
+            f"Run at most {WEB_SEARCH_MAX_USES} targeted searches, then output JSON.",
             "",
         ]
     )
 
     if exclude_urls:
         lines.append("Skip these URLs (already posted):")
-        for url in exclude_urls[:20]:
+        for url in exclude_urls[:EXCLUDE_URL_PROMPT_LIMIT]:
             lines.append(f"- {url}")
         lines.append("")
 
@@ -269,71 +239,34 @@ def _fallback_research(
     preferences: dict,
     intent: dict | None = None,
 ) -> list[Article]:
-    """에이전트 실패 시 웹 검색 1회로 기사를 수집합니다."""
+    """에이전트 실패 시 웹 검색으로 기사를 수집합니다.
+
+    스트리밍·재시도·절단 감지는 claude_search에 위임한다.
+    (기존에는 이 함수와 에이전트가 같은 로직을 복제하고 있었고,
+     max_tokens 절단 검사가 양쪽 모두 빠져 있었다.)
+    """
     prompt = build_fallback_prompt(count, exclude_urls, preferences, intent)
+    max_age_days = recency.max_age_from_intent(intent)
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    outcome = claude_search.search_articles(
+        client,
+        prompt=prompt,
+        system_blocks=_SYSTEM_RESEARCH_BLOCKS,
+        caller="curator_fallback",
+    )
 
-    try:
-        _t0 = time.perf_counter()
-        with client.messages.stream(
-            model=CLAUDE_MODEL,
-            max_tokens=1500,
-            tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
-            system=_SYSTEM_RESEARCH_BLOCKS,
-            messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            response = stream.get_final_message()
+    if not outcome.articles:
+        print(f"[Curator] 폴백 결과 없음 (stop_reason={outcome.stop_reason}, error={outcome.error})")
+        return []
 
-        token_tracker.log_token_usage(
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-            caller="curator_fallback",
-            elapsed_seconds=round(time.perf_counter() - _t0, 2),
-        )
+    fresh = [item for item in outcome.articles if not recency.is_stale(item.get("published_at"), max_age_days)]
+    dropped = len(outcome.articles) - len(fresh)
+    if dropped:
+        print(f"[Curator] 폴백 기한초과 {dropped}개 제외 (최근 {max_age_days}일 기준)")
 
-        for block in response.content:
-            if block.type == "text":
-                data = _extract_json_array(block.text)
-                if data:
-                    print(f"[Curator] 폴백 완료: {len(data)}개 수집")
-                    return _to_articles(data[:count])
-
-    except anthropic.RateLimitError:
-        print("[Curator] 폴백 RateLimit — 30초 대기 후 재시도")
-        time.sleep(30)
-        try:
-            _t0 = time.perf_counter()
-            with client.messages.stream(
-                model=CLAUDE_MODEL,
-                max_tokens=1500,
-                tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}],
-                system=_SYSTEM_RESEARCH_BLOCKS,
-                messages=[{"role": "user", "content": prompt}],
-            ) as stream:
-                response = stream.get_final_message()
-            token_tracker.log_token_usage(
-                response.usage.input_tokens,
-                response.usage.output_tokens,
-                caller="curator_fallback_retry",
-                elapsed_seconds=round(time.perf_counter() - _t0, 2),
-            )
-            for block in response.content:
-                if block.type == "text":
-                    data = _extract_json_array(block.text)
-                    if data:
-                        print(f"[Curator] 폴백 재시도 완료: {len(data)}개 수집")
-                        return _to_articles(data[:count])
-        except Exception as e:
-            print(f"[Curator] 폴백 재시도 실패: {e}")
-
-    except anthropic.APIStatusError as e:
-        print(f"[Curator] 폴백 API 오류 ({e.status_code}): {e}")
-
-    except Exception as e:
-        print(f"[Curator] 폴백 예상치 못한 오류: {e}")
-
-    return []
+    print(f"[Curator] 폴백 완료: {len(fresh)}개 수집")
+    return _to_articles(fresh[:count])
 
 
 # ─── 공개 API ─────────────────────────────────────────────────────────────────
