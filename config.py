@@ -37,6 +37,78 @@ ARTICLES_PER_POST = 3  # 하루 기본 게시 수
 MORE_ARTICLES_MAX = 10  # !more 최대 요청 수
 MAX_PER_SOURCE = 10  # 소스당 최대 수집 수
 
+# ── 랭킹 정규화 ───────────────────────────────────
+# 모든 프로듀서(Claude 웹 검색 / HackerNews / RSS)는 platform_score를
+# 0~100 밴드로 emit한다. 소스별 상한을 두면 같은 점수가 소스에 따라
+# 수십 배 다르게 평가되므로 단일 밴드로 통일한다.
+PLATFORM_SCORE_BAND_MAX = 100.0
+
+# ── 신선도(recency) 설정 ──────────────────────────
+# web_search 도구에는 날짜 필터 파라미터가 존재하지 않는다.
+# 따라서 신선도는 (1) 프롬프트에 오늘 날짜를 주입하고
+#              (2) published_at을 코드에서 하드 필터링해 강제한다.
+RECENCY_MAX_AGE_DAYS = 7  # 이 일수를 넘긴 기사는 폐기
+RECENCY_PREFERRED_AGE_DAYS = 2  # 프롬프트에서 우선 요청할 기간
+
+# ── 수집 신뢰성 설정 ──────────────────────────────
+# 목표 수량을 채우기 위한 오버페치·재시도 파라미터.
+# 중복(이미 게시)·신선도 미달로 버려지는 양을 흡수한다.
+OVERFETCH_MULTIPLIER = 4  # 목표 N개 → N×4개 요청
+OVERFETCH_MIN = 8  # 오버페치 최소 요청 수
+OVERFETCH_MAX = 24  # 오버페치 최대 요청 수 (토큰 보호)
+TOPUP_MAX_ROUNDS = 2  # 목표 미달 시 추가 검색 횟수
+EXCLUDE_URL_LOOKBACK_DAYS = 45  # 중복 제외 대상 게시 이력 조회 기간
+EXCLUDE_URL_PROMPT_LIMIT = 40  # 프롬프트에 나열할 제외 URL 최대 수
+
+# ── Claude 호출 설정 ──────────────────────────────
+# 서버사이드 web_search 결과 블록이 출력 예산을 잠식하므로
+# max_tokens가 작으면 JSON이 잘려 조용히 0건이 된다. (실측: output 1,300~8,400)
+SEARCH_MAX_TOKENS = 4096
+WEB_SEARCH_TOOL_TYPE = "web_search_20260209"
+WEB_SEARCH_MAX_USES = 3
+# web_search_20260209는 allowed_callers 기본값이 code_execution이라
+# programmatic tool calling 미지원 모델에서 400이 발생한다. 명시적으로 direct 지정.
+WEB_SEARCH_ALLOWED_CALLERS = ["direct"]
+
+# ── 결정론적 신선 소스 (HN / RSS) ─────────────────
+# Claude 웹 검색이 0건이거나 목표 미달일 때 보충하는 후보 풀.
+# 발행일이 API/피드에서 직접 오므로 신선도가 구조적으로 보장된다.
+FEED_POOL_ENABLED = True
+HN_MIN_POINTS = 30  # HN 최소 점수
+HN_MAX_RESULTS = 40  # HN Algolia 조회 상한
+HN_SEARCH_QUERIES = [
+    "claude code",
+    "llm agent",
+    "prompt engineering",
+    "ai coding",
+    "mcp server",
+    "ai game development",
+]
+FEED_HTTP_TIMEOUT = 8.0  # 초
+RSS_MAX_PER_FEED = 12  # 피드당 최대 채택 수
+# 후보풀 선별 기준.
+# 관련도 0점(대상 독자와 무관)인 후보는 버린다. arXiv cs.AI처럼 하루 60편씩
+# 쏟아지는 피드가 날짜만으로 상위를 독식하는 것을 막기 위해 소스별 상한도 둔다.
+FEED_MIN_RELEVANCE = 1
+FEED_MAX_PER_SOURCE = 2
+FEED_GAME_DEV_WEIGHT = 2  # 게임 개발 키워드 가중치
+FEED_TITLE_WEIGHT = 3  # 제목 매치 가중치
+FEED_DESC_MATCH_CAP = 3  # 설명 매치 상한 (긴 학술 초록의 키워드 밀집 방지)
+
+# 소스 티어 — 낮을수록 우선. 관련도보다 먼저 적용된다.
+# 티어링이 필요한 이유: 관련도를 키워드 개수로만 재면 초록이 긴 arXiv 논문이
+# 항상 이긴다. 실제 QA에서 HN 후보 16개가 전부 arXiv에 밀렸다.
+FEED_TIER_COMMUNITY = 0  # 투표로 검증된 소스
+FEED_TIER_EDITORIAL = 1  # 큐레이션된 매체·블로그
+FEED_TIER_ACADEMIC = 2  # 학술 프리프린트
+FEED_SOURCE_TIERS: dict[str, int] = {
+    "HackerNews": FEED_TIER_COMMUNITY,
+    "ArXiv cs.AI": FEED_TIER_ACADEMIC,
+    "ArXiv cs.LG": FEED_TIER_ACADEMIC,
+    "ArXiv cs.GR": FEED_TIER_ACADEMIC,
+}
+FEED_DEFAULT_TIER = FEED_TIER_EDITORIAL
+
 # ── AI 관련 필터 키워드 ───────────────────────────
 AI_KEYWORDS = [
     # AI 코딩 도구 및 워크플로우
@@ -178,7 +250,9 @@ RSS_FEEDS: dict[str, str] = {
     "Game Developer": "https://www.gamedeveloper.com/rss.xml",
     "GDC Blog": "https://gdconf.com/rss.xml",
     "ArXiv cs.GR": "https://export.arxiv.org/rss/cs.GR",
-    "Reddit r/gamedev": "https://www.reddit.com/r/gamedev/.rss",
+    # Reddit r/gamedev RSS는 아티클 피드가 아니라 토론 피드라서 제외했다.
+    # (QA에서 "Scam alert? I am getting a lot of PM in discord..." 같은 잡담이
+    #  게시 후보로 올라왔다.) Reddit은 HN처럼 점수 기반 필터가 있어야 쓸 수 있다.
 }
 
 # RSS에서 AI 키워드 필터링이 필요 없는 소스 (이미 AI 특화)
