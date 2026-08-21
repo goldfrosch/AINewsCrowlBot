@@ -11,6 +11,8 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+from config import AI_KEYWORDS, EXCLUDE_URL_LOOKBACK_DAYS
+
 DB_PATH = Path("data/bot.db")
 
 
@@ -90,6 +92,14 @@ def init_db() -> None:
         """)
         _migrate(conn)
 
+    merged = merge_keyword_variants()
+    if merged:
+        print(f"[DB] 표기가 갈린 키워드 {merged}개 병합 (예: 'ai agent' → 'ai_agent')")
+
+    removed = cleanup_noise_keywords()
+    if removed:
+        print(f"[DB] 학습 신호를 오염시키던 노이즈 키워드 {removed}개 정리")
+
 
 def _migrate(conn) -> None:
     """기존 DB 구조(keyword_preferences, articles.keywords)를 새 스키마로 마이그레이션."""
@@ -143,6 +153,18 @@ def _rows_with_keywords(rows) -> list[dict]:
     return result
 
 
+def canonical_keyword(keyword: object) -> str:
+    """키워드 표기를 하나로 통일한다 (소문자, 공백→언더스코어).
+
+    모델은 `"ai agent"`를, `ranker.extract_keywords()`는 `"ai_agent"`를 만들어
+    같은 개념이 두 행으로 쪼개졌고 👍/👎 신호가 반으로 갈렸다.
+    하이픈은 `fine-tuning`, `gpt-4`처럼 원래 표기의 일부라 유지한다.
+    """
+    if not isinstance(keyword, str):
+        return ""
+    return keyword.strip().lower().replace(" ", "_")
+
+
 def _link_keywords(conn, article_id: int, keywords) -> None:
     """keywords(list 또는 JSON 문자열)를 keywords 테이블에 upsert하고 article_keywords에 연결."""
     if isinstance(keywords, str):
@@ -150,7 +172,8 @@ def _link_keywords(conn, article_id: int, keywords) -> None:
             keywords = json.loads(keywords)
         except (json.JSONDecodeError, TypeError):
             keywords = []
-    for kw in keywords or []:
+    for raw in keywords or []:
+        kw = canonical_keyword(raw)
         if not kw:
             continue
         conn.execute("INSERT OR IGNORE INTO keywords (keyword) VALUES (?)", (kw,))
@@ -294,6 +317,9 @@ def update_source_preference(source: str, liked: bool) -> None:
 
 
 def update_keyword_preference(keyword: str, liked: bool) -> None:
+    keyword = canonical_keyword(keyword)
+    if not keyword:
+        return
     delta = KEYWORD_DELTA if liked else -KEYWORD_DELTA
     likes_inc = 1 if liked else 0
     dislikes_inc = 0 if liked else 1
@@ -365,6 +391,119 @@ def get_todays_posted_urls() -> list[str]:
             """
         ).fetchall()
     return [r["url"] for r in rows]
+
+
+def get_recent_posted_urls(days: int = EXCLUDE_URL_LOOKBACK_DAYS) -> list[str]:
+    """최근 N일간 게시된 기사 URL 목록 반환.
+
+    `get_todays_posted_urls()`는 브리핑이 실행되는 06:00 시점에 항상 빈 배열이라
+    큐레이터에게 중복 회피 정보를 전혀 주지 못했다. 그 결과 모델이 어제·그제
+    기사를 재추천하고, UNIQUE 제약으로 조용히 폐기되어 "하루 1건/0건" 문제가
+    발생했다. 이 함수는 실제 게시 이력을 넘겨 재추천 자체를 막는다.
+
+    최신순으로 정렬해 반환하므로 프롬프트에 앞부분만 넣어도 최근 중복을 먼저 막는다.
+    """
+    lookback = max(int(days), 0)
+    with _db() as conn:
+        rows = conn.execute(
+            """
+            SELECT url FROM articles
+            WHERE status = 'posted'
+              AND posted_at IS NOT NULL
+              AND date(posted_at) >= date('now', '+9 hours', ?)
+            ORDER BY posted_at DESC
+            """,
+            (f"-{lookback} days",),
+        ).fetchall()
+    return [r["url"] for r in rows]
+
+
+def get_all_article_urls() -> set[str]:
+    """DB에 이미 존재하는 모든 기사 URL (게시 여부 무관)."""
+    with _db() as conn:
+        rows = conn.execute("SELECT url FROM articles").fetchall()
+    return {r["url"] for r in rows}
+
+
+def _ai_keyword_whitelist() -> set[str]:
+    """AI_KEYWORDS의 공백형·언더스코어형 정규화 집합."""
+    allowed: set[str] = set()
+    for kw in AI_KEYWORDS:
+        normalized = kw.strip().lower()
+        if not normalized:
+            continue
+        allowed.add(normalized)
+        allowed.add(normalized.replace(" ", "_"))
+    return allowed
+
+
+def merge_keyword_variants() -> int:
+    """공백 표기 키워드를 언더스코어 정규형으로 병합한다.
+
+    같은 개념이 두 행으로 나뉘어 👍/👎가 절반씩 흩어져 있던 것을 합친다.
+    multiplier는 누적 likes/dislikes로 재계산한다.
+
+    Returns:
+        병합되어 사라진 행 수
+    """
+    merged = 0
+    with _db() as conn:
+        rows = conn.execute("SELECT id, keyword, total_likes, total_dislikes FROM keywords").fetchall()
+        by_canonical: dict[str, list] = {}
+        for row in rows:
+            by_canonical.setdefault(canonical_keyword(row["keyword"]), []).append(row)
+
+        for canonical, group in by_canonical.items():
+            if not canonical or len(group) < 2:
+                continue
+            likes = sum(r["total_likes"] for r in group)
+            dislikes = sum(r["total_dislikes"] for r in group)
+            keeper = next((r for r in group if r["keyword"] == canonical), group[0])
+
+            for row in group:
+                if row["id"] == keeper["id"]:
+                    continue
+                conn.execute(
+                    "UPDATE OR IGNORE article_keywords SET keyword_id = ? WHERE keyword_id = ?",
+                    (keeper["id"], row["id"]),
+                )
+                conn.execute("DELETE FROM article_keywords WHERE keyword_id = ?", (row["id"],))
+                conn.execute("DELETE FROM keywords WHERE id = ?", (row["id"],))
+                merged += 1
+
+            conn.execute(
+                "UPDATE keywords SET keyword = ?, total_likes = ?, total_dislikes = ?, multiplier = ? WHERE id = ?",
+                (canonical, likes, dislikes, _clamp(1.0 + KEYWORD_DELTA * (likes - dislikes)), keeper["id"]),
+            )
+    return merged
+
+
+def cleanup_noise_keywords() -> int:
+    """어떤 기사에도 연결되지 않은 비-AI 키워드 행을 제거한다.
+
+    `ranker.extract_keywords()` 폴백이 제목·설명을 통째로 토큰화했기 때문에
+    `'이유**'`, `'**선정'`, `'into'`, `'covering'` 같은 마크다운·불용어 잔재가
+    선호도 테이블 상위를 차지했다(실측 622행). 모델이 태깅한 키워드는
+    article_keywords에 연결되므로, 미연결 + 화이트리스트 밖 행만 정리한다.
+
+    Returns:
+        삭제된 행 수
+    """
+    allowed = _ai_keyword_whitelist()
+    with _db() as conn:
+        rows = conn.execute(
+            """
+            SELECT k.id, k.keyword
+            FROM keywords k
+            LEFT JOIN article_keywords ak ON ak.keyword_id = k.id
+            WHERE ak.keyword_id IS NULL
+            """
+        ).fetchall()
+        doomed = [r["id"] for r in rows if (r["keyword"] or "").strip().lower() not in allowed]
+        if not doomed:
+            return 0
+        conn.executemany("DELETE FROM keywords WHERE id = ?", [(kid,) for kid in doomed])
+    return len(doomed)
 
 
 def get_stats() -> dict:

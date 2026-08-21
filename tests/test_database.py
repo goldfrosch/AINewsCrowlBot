@@ -227,3 +227,169 @@ class TestGetStats:
         assert stats["total"] == 3
         assert stats["pending"] == 3
         assert stats["posted"] == 0
+
+
+def _insert(url: str, title: str = "T", source: str = "Test", keywords=None) -> int:
+    db.upsert_article(
+        {
+            "url": url,
+            "title": title,
+            "source": source,
+            "description": "",
+            "author": "",
+            "image_url": "",
+            "published_at": "",
+            "platform_score": 100,
+            "keywords": keywords or [],
+        }
+    )
+    return next(a["id"] for a in db.get_pending_articles(limit=50) if a["url"] == url)
+
+
+def _backdate_post(url: str, days: int) -> None:
+    """posted_at을 과거로 옮겨 lookback 경계를 테스트한다."""
+    with db._db() as conn:
+        conn.execute(
+            "UPDATE articles SET posted_at = datetime('now', '+9 hours', ?) WHERE url = ?",
+            (f"-{days} days", url),
+        )
+
+
+class TestGetRecentPostedUrls:
+    """오늘 게시분만 보던 로직이 '하루 1건/0건' 문제의 최대 원인이었다."""
+
+    def test_includes_articles_posted_days_ago(self, tmp_db):
+        article_id = _insert("https://example.com/older")
+        db.mark_as_posted(article_id, "msg", "ch")
+        _backdate_post("https://example.com/older", 5)
+
+        assert "https://example.com/older" in db.get_recent_posted_urls(days=45)
+        # 기존 함수는 같은 기사를 놓친다 → 재추천 → UNIQUE 제약으로 조용히 폐기
+        assert "https://example.com/older" not in db.get_todays_posted_urls()
+
+    def test_excludes_beyond_lookback(self, tmp_db):
+        article_id = _insert("https://example.com/ancient")
+        db.mark_as_posted(article_id, "msg", "ch")
+        _backdate_post("https://example.com/ancient", 100)
+
+        assert "https://example.com/ancient" not in db.get_recent_posted_urls(days=45)
+
+    def test_excludes_pending(self, tmp_db):
+        _insert("https://example.com/pending-only")
+        assert "https://example.com/pending-only" not in db.get_recent_posted_urls()
+
+    def test_empty_db(self, tmp_db):
+        assert db.get_recent_posted_urls() == []
+
+
+class TestGetAllArticleUrls:
+    def test_includes_pending_and_posted(self, tmp_db):
+        pending_id = _insert("https://example.com/p")
+        posted_id = _insert("https://example.com/q")
+        db.mark_as_posted(posted_id, "msg", "ch")
+        assert pending_id != posted_id
+
+        urls = db.get_all_article_urls()
+        assert urls == {"https://example.com/p", "https://example.com/q"}
+
+
+class TestCleanupNoiseKeywords:
+    """실측: keywords 테이블 622행 중 상위가 `'이유**'`, `'**선정'` 같은 마크다운 잔재."""
+
+    def test_removes_unlinked_non_ai_keywords(self, tmp_db):
+        db.update_keyword_preference("이유**", liked=True)
+        db.update_keyword_preference("covering", liked=True)
+
+        removed = db.cleanup_noise_keywords()
+
+        names = {k["keyword"] for k in db.get_all_preferences()["keywords"]}
+        assert removed == 2
+        assert "이유**" not in names
+        assert "covering" not in names
+
+    def test_keeps_whitelisted_ai_keywords(self, tmp_db):
+        db.update_keyword_preference("claude", liked=True)
+        db.update_keyword_preference("prompt_engineering", liked=True)
+
+        db.cleanup_noise_keywords()
+
+        names = {k["keyword"] for k in db.get_all_preferences()["keywords"]}
+        assert "claude" in names
+        assert "prompt_engineering" in names
+
+    def test_keeps_keywords_linked_to_articles(self, tmp_db):
+        """모델이 태깅한 키워드는 화이트리스트 밖이어도 보존한다."""
+        _insert("https://example.com/tagged", keywords=["some-curated-topic"])
+
+        db.cleanup_noise_keywords()
+
+        names = {k["keyword"] for k in db.get_all_preferences()["keywords"]}
+        assert "some-curated-topic" in names
+
+    def test_idempotent(self, tmp_db):
+        db.update_keyword_preference("into", liked=True)
+        assert db.cleanup_noise_keywords() == 1
+        assert db.cleanup_noise_keywords() == 0
+
+
+class TestCanonicalKeyword:
+    def test_spaces_become_underscores(self):
+        assert db.canonical_keyword("ai agent") == "ai_agent"
+
+    def test_lowercased_and_stripped(self):
+        assert db.canonical_keyword("  Prompt Engineering ") == "prompt_engineering"
+
+    def test_hyphens_preserved(self):
+        """`fine-tuning`, `gpt-4`는 하이픈이 원래 표기의 일부다."""
+        assert db.canonical_keyword("fine-tuning") == "fine-tuning"
+        assert db.canonical_keyword("GPT-4") == "gpt-4"
+
+    def test_non_string_is_empty(self):
+        assert db.canonical_keyword(None) == ""
+        assert db.canonical_keyword(42) == ""
+
+
+class TestMergeKeywordVariants:
+    """`ai agent`와 `ai_agent`가 따로 쌓여 👍/👎 신호가 반으로 갈렸다."""
+
+    def test_variants_merged_with_summed_counts(self, tmp_db):
+        with db._db() as conn:
+            conn.execute(
+                "INSERT INTO keywords (keyword, multiplier, total_likes, total_dislikes) VALUES ('ai agent', 1.05, 1, 0)"
+            )
+            conn.execute(
+                "INSERT INTO keywords (keyword, multiplier, total_likes, total_dislikes) VALUES ('ai_agent', 1.05, 2, 1)"
+            )
+
+        merged = db.merge_keyword_variants()
+
+        rows = {k["keyword"]: k for k in db.get_all_preferences()["keywords"]}
+        assert merged == 1
+        assert "ai agent" not in rows
+        assert rows["ai_agent"]["total_likes"] == 3
+        assert rows["ai_agent"]["total_dislikes"] == 1
+
+    def test_preference_writes_are_canonical(self, tmp_db):
+        db.update_keyword_preference("ai agent", liked=True)
+        db.update_keyword_preference("ai_agent", liked=True)
+
+        rows = {k["keyword"]: k for k in db.get_all_preferences()["keywords"]}
+        assert set(rows) == {"ai_agent"}
+        assert rows["ai_agent"]["total_likes"] == 2
+
+    def test_article_keywords_are_canonical(self, tmp_db):
+        _insert("https://example.com/kw", keywords=["Prompt Engineering", "MCP"])
+
+        names = {k["keyword"] for k in db.get_all_preferences()["keywords"]}
+        assert names == {"prompt_engineering", "mcp"}
+
+    def test_no_variants_is_noop(self, tmp_db):
+        db.update_keyword_preference("llm", liked=True)
+        assert db.merge_keyword_variants() == 0
+
+    def test_idempotent(self, tmp_db):
+        with db._db() as conn:
+            conn.execute("INSERT INTO keywords (keyword, total_likes) VALUES ('ai agent', 1)")
+            conn.execute("INSERT INTO keywords (keyword, total_likes) VALUES ('ai_agent', 1)")
+        assert db.merge_keyword_variants() == 1
+        assert db.merge_keyword_variants() == 0
