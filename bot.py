@@ -2,7 +2,7 @@
 Discord 봇 본체
 
 주요 흐름:
-  1. 매일 새벽 3시(KST): Claude 에이전트 큐레이션 → 상위 5개 게시
+  1. 매일 06:00 KST: Claude 에이전트 큐레이션 → 상위 ARTICLES_PER_POST개 게시
   2. 각 기사 임베드에 👍/👎 반응 자동 추가 → 선호도 학습
   3. !more [n]  : 추가 기사 n개 (Claude가 이미 게시된 URL 제외 후 새로 리서치)
   4. !crawl     : 즉시 브리핑 (관리자)
@@ -19,6 +19,7 @@ import discord
 from discord.ext import commands, tasks
 
 import database as db
+import recency
 import token_tracker
 from agents.preference_analysis import run_preference_analysis, save_preference_profile
 from config import (
@@ -107,11 +108,40 @@ def _make_embed(article: dict, is_ai_curated: bool = False) -> discord.Embed:
         embed.set_thumbnail(url=article["image_url"])
 
     pub = (article.get("published_at") or "")[:10]
-    footer = f"발행일: {pub}  |  " if pub else ""
+    footer = f"발행일: {pub} ({recency.describe(pub)})  |  " if pub else ""
     footer += "👍 좋아요  /  👎 별로예요"
     embed.set_footer(text=footer)
 
     return embed
+
+
+def _summary_message(result: dict, count: int) -> str:
+    """게시 성공 시 상태 메시지. 손실 내역을 노출해 원인을 즉시 알 수 있게 한다."""
+    lines = []
+    if result.get("error"):
+        lines.append(f"⚠️ Claude 검색 실패 → 후보풀로 대체 (`{result['error'][:120]}`)")
+    lines.append(
+        f"✅ 큐레이션 완료 — {len(result['articles'])}/{count}개 (최근 {result.get('max_age_days', '?')}일 기준)"
+    )
+    lines.append(
+        f"수집 {result.get('raw_count', 0)} · 기한초과 {result.get('stale_dropped', 0)} 제외 · "
+        f"신규 {result.get('new_count', 0)} · feed 보충 {result.get('feed_topup', 0)}"
+    )
+    return "\n".join(lines)
+
+
+def _failure_message(result: dict, count: int) -> str:
+    """게시할 기사가 0건일 때 원인을 특정해서 알린다."""
+    if result.get("error"):
+        return f"❌ 큐레이션 실패: {result['error'][:400]}"
+    if result.get("raw_count", 0) == 0:
+        return f"⚠️ 웹 검색 결과가 없고 HN/RSS 후보풀도 비었습니다. (목표 {count}개)"
+    if result.get("stale_dropped", 0) >= result.get("raw_count", 0):
+        return (
+            f"📭 수집한 {result['raw_count']}개가 전부 기한초과"
+            f"(최근 {result.get('max_age_days', '?')}일 기준)로 제외됐습니다."
+        )
+    return f"📭 게시할 새 기사가 없습니다 — 수집 {result.get('raw_count', 0)}개가 모두 기존 게시분과 중복입니다."
 
 
 # ─── 봇 설정 ──────────────────────────────────────────────────────────────────
@@ -191,18 +221,13 @@ async def _research_and_post(
     try:
         result = await asyncio.to_thread(run_curation_pipeline, count)
 
-        if result["error"]:
-            await status_msg.edit(content=f"❌ Claude 큐레이션 실패: {result['error']}")
-            return
-
+        # curator가 실패해도 feed 후보풀로 채워졌다면 게시한다.
+        # (기존에는 error가 있으면 즉시 반환해 보충분까지 버렸다.)
         if not result["articles"]:
-            msg = "⚠️ Claude 큐레이션 결과가 없습니다." if result["raw_count"] == 0 else "📭 게시할 새 기사가 없습니다."
-            await status_msg.edit(content=msg)
+            await status_msg.edit(content=_failure_message(result, count))
             return
 
-        await status_msg.edit(
-            content=f"✅ Claude 큐레이션 완료 — {result['raw_count']}개 선정 ({result['new_count']}개 신규)"
-        )
+        await status_msg.edit(content=_summary_message(result, count))
 
     except Exception as e:
         await status_msg.edit(content=f"❌ Claude 큐레이션 실패: {e}")
