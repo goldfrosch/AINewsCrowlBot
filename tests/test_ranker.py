@@ -1,43 +1,41 @@
 """ranker.py 단위 테스트"""
 
+import pytest
+
+from config import PLATFORM_SCORE_BAND_MAX
 from ranker import (
     _normalize,
     apply_feedback,
     extract_keywords,
+    learnable_keywords,
     rank_articles,
 )
+from tests.conftest import days_ago
 
 # ── _normalize ──────────────────────────────────────────────────────────────
 
 
 class TestNormalize:
-    def test_default_cap(self):
-        score = _normalize(25_000.0, "UnknownSource")
-        assert 0.0 < score < 1.0
+    """platform_score는 모든 프로듀서가 0~100 밴드로 emit한다 (소스별 상한 없음)."""
 
-    def test_default_cap_exact(self):
-        score = _normalize(50_000.0, "UnknownSource")
-        assert score == 1.0
+    def test_mid_band(self):
+        assert _normalize(50.0) == pytest.approx(0.5)
 
-    def test_default_cap_over(self):
-        score = _normalize(100_000.0, "UnknownSource")
-        assert score == 1.0
+    def test_band_max(self):
+        assert _normalize(PLATFORM_SCORE_BAND_MAX) == 1.0
 
-    def test_hackernews_cap(self):
-        assert _normalize(1_500.0, "HackerNews") == 1.0
-        assert _normalize(750.0, "HackerNews") == 0.5
-
-    def test_youtube_cap(self):
-        assert _normalize(5_000_000.0, "YouTube") == 1.0
+    def test_over_band_clamped(self):
+        assert _normalize(PLATFORM_SCORE_BAND_MAX * 10) == 1.0
 
     def test_zero_score(self):
-        assert _normalize(0.0, "HackerNews") == 0.0
+        assert _normalize(0.0) == 0.0
 
-    def test_zero_cap(self):
-        # cap이 0이면 0 반환
-        assert _normalize(100.0, "") == pytest.approx(0.002, rel=0.01) if False else True
-        # default cap = 50000
-        assert _normalize(100.0, "SomeSource") == pytest.approx(100 / 50_000)
+    def test_negative_clamped(self):
+        assert _normalize(-50.0) == 0.0
+
+    def test_source_independent(self):
+        """같은 점수는 소스와 무관하게 같은 base를 갖는다 (33배 왜곡 회귀 방지)."""
+        assert _normalize(100.0) == _normalize(100.0)
 
 
 # ── extract_keywords ────────────────────────────────────────────────────────
@@ -102,9 +100,9 @@ class TestRankArticles:
         mocker.patch("ranker.db.update_final_scores")
 
         articles = [
-            {"source": "A", "platform_score": 100.0, "keywords": [], "title": "Low"},
-            {"source": "B", "platform_score": 1000.0, "keywords": [], "title": "High"},
-            {"source": "C", "platform_score": 500.0, "keywords": [], "title": "Mid"},
+            {"source": "A", "platform_score": 20.0, "keywords": [], "title": "Low"},
+            {"source": "B", "platform_score": 100.0, "keywords": [], "title": "High"},
+            {"source": "C", "platform_score": 60.0, "keywords": [], "title": "Mid"},
         ]
         result = rank_articles(articles)
         assert result[0]["title"] == "High"
@@ -122,8 +120,8 @@ class TestRankArticles:
         mocker.patch("ranker.db.update_final_scores")
 
         articles = [
-            {"source": "HN", "platform_score": 1000.0, "keywords": [], "title": "A"},
-            {"source": "Other", "platform_score": 1000.0, "keywords": [], "title": "B"},
+            {"source": "HN", "platform_score": 100.0, "keywords": [], "title": "A"},
+            {"source": "Other", "platform_score": 100.0, "keywords": [], "title": "B"},
         ]
         result = rank_articles(articles)
         assert result[0]["title"] == "A"
@@ -140,11 +138,60 @@ class TestRankArticles:
         mocker.patch("ranker.db.update_final_scores")
 
         articles = [
-            {"source": "X", "platform_score": 1000.0, "keywords": ["llm"], "title": "WithLLM"},
-            {"source": "X", "platform_score": 1000.0, "keywords": ["other"], "title": "NoLLM"},
+            {"source": "X", "platform_score": 100.0, "keywords": ["llm"], "title": "WithLLM"},
+            {"source": "X", "platform_score": 100.0, "keywords": ["other"], "title": "NoLLM"},
         ]
         result = rank_articles(articles)
         assert result[0]["title"] == "WithLLM"
+
+
+class TestRecencyRanking:
+    def _prefs(self, mocker):
+        mocker.patch("ranker.db.get_all_preferences", return_value={"sources": [], "keywords": []})
+        mocker.patch("ranker.db.update_final_scores")
+
+    def test_fresher_article_wins(self, mocker):
+        self._prefs(mocker)
+        articles = [
+            {"source": "X", "platform_score": 100.0, "keywords": [], "title": "Old", "published_at": days_ago(20)},
+            {"source": "X", "platform_score": 100.0, "keywords": [], "title": "Fresh", "published_at": days_ago(0)},
+        ]
+        result = rank_articles(articles)
+        assert result[0]["title"] == "Fresh"
+
+    def test_missing_date_ranks_below_fresh(self, mocker):
+        self._prefs(mocker)
+        articles = [
+            {"source": "X", "platform_score": 100.0, "keywords": [], "title": "Undated", "published_at": ""},
+            {"source": "X", "platform_score": 100.0, "keywords": [], "title": "Fresh", "published_at": days_ago(1)},
+        ]
+        result = rank_articles(articles)
+        assert result[0]["title"] == "Fresh"
+
+
+class TestLearnableKeywords:
+    def test_model_tagged_keywords_trusted(self):
+        article = {"title": "x", "description": "y", "keywords": ["claude code", "mcp"]}
+        assert learnable_keywords(article) == ["claude code", "mcp"]
+
+    def test_markdown_noise_not_learned(self):
+        """`💡 **선정 이유**: ...` 마크다운이 키워드로 학습되던 회귀를 막는다."""
+        article = {
+            "title": "Some Article",
+            "description": "A description\n\n💡 **선정 이유**: covering directly into workflow",
+            "keywords": [],
+        }
+        learned = learnable_keywords(article)
+        assert "이유**" not in learned
+        assert "**선정" not in learned
+        assert "covering" not in learned
+        assert "directly" not in learned
+
+    def test_whitelisted_fallback_still_extracts(self):
+        article = {"title": "Prompt engineering with RAG", "description": "", "keywords": []}
+        learned = learnable_keywords(article)
+        assert "prompt_engineering" in learned
+        assert "rag" in learned
 
 
 # ── apply_feedback ──────────────────────────────────────────────────────────
@@ -172,6 +219,3 @@ class TestApplyFeedback:
         mocker.patch("ranker.db.get_article_by_message_id", return_value=None)
         result = apply_feedback("msg_nonexistent", liked=True)
         assert result is False
-
-
-import pytest
