@@ -1,16 +1,17 @@
 # AINewsCrawlBot
 
-매일 오전 6시(KST)에 AI 뉴스·논문·개발 도구를 Claude로 자동 큐레이션해 Discord에 게시하는 봇.
+매일 오전 6시(KST)에 실용적인 AI 프로그래밍·게임 에셋 자료를 Claude로 자동 큐레이션해 Discord에 게시하는 봇.
 사용자의 👍/👎 반응을 학습해 다음 날 브리핑의 소스·키워드 가중치를 자동으로 조정한다.
 
 ---
 
 ## 주요 기능
 
-- **자동 브리핑** — 매일 06:00 KST에 AI 뉴스 상위 3개를 Discord 채널에 게시 (게임 개발+AI 기사 최소 1개 포함)
+- **자동 브리핑** — 매일 06:00 KST에 품질 기준을 통과한 자료를 최대 2개 Discord 채널에 게시
+- **본문·편집 검증** — 실제 본문의 언어·발행일·내용을 확인하고 별도 Claude 심사로 실용성과 품질을 평가
 - **신선도 강제** — 발행일이 7일을 넘긴 기사는 코드에서 폐기. 프롬프트에 오늘 날짜를 주입해 모델이 최신 기사를 찾도록 유도
 - **이중 수집 경로** — Claude 웹 검색이 실패하거나 목표 수량에 미달하면 HackerNews·RSS 후보풀로 자동 보충
-- **수량 보장** — 목표 대비 4배 오버페치 + 최대 2회 톱업 재검색으로 중복·기한초과 손실을 흡수
+- **품질 우선** — 목표 대비 4배 오버페치하되 기준 미달이면 1개 또는 0개만 게시
 - **선호도 학습** — 👍/👎 반응 누적 → 소스·키워드 배율 자동 조정
 - **새벽 선호도 분석** — 02:00 KST에 DB 데이터를 심층 분석해 큐레이션 힌트 생성
 - **토큰 사용량 추적** — Anthropic API 호출 비용을 일별/5시간 윈도우별로 모니터링
@@ -51,13 +52,15 @@ main.py
 [06:00 KST] 뉴스 브리핑
     1. data/preference_profile.json + data/curation_intent.json 로드
     2. 최근 45일 게시 URL을 제외 목록으로 전달 (중복 재추천 차단)
-    3. Claude 웹 검색 — 목표 3개면 12개 요청, 부족하면 토픽을 회전시켜 최대 2회 재검색
-    4. 신선도 컷오프 — published_at이 7일을 넘긴 기사 폐기
-    5. 목표 미달이면 HN(30점 이상)·RSS 후보풀로 보충
-    6. 랭킹 → Discord 게시 (임베드 + 👍/👎 반응 자동 추가)
+    3. Claude 웹 검색 — 목표 2개면 8개 요청, 부족하면 토픽을 회전시켜 최대 2회 재검색
+    4. 실제 페이지 본문·언어·발행일 검증과 최근 게시물 근중복 제거
+    5. 별도 편집 심사로 실용성·품질 평가 및 한국어 브리핑 생성
+    6. 목표 미달이면 HN(30점 이상)·RSS 후보도 같은 검증을 거쳐 보충
+    7. 품질 우선 랭킹 → 최대 2개 Discord 게시
 ```
 
-수집 경로가 2개이므로 한쪽이 완전히 죽어도(예: Anthropic 크레딧 소진) 브리핑이 0건이 되지 않는다.
+검색 경로는 Claude 웹 검색과 HN/RSS 두 개다. 웹 검색만 실패하면 feed로 보충하지만,
+공통 품질 심사에 필요한 Anthropic API를 사용할 수 없으면 검수되지 않은 기사를 게시하지 않는다.
 
 ### 신선도 정책
 
@@ -71,7 +74,7 @@ main.py
 ### 랭킹 공식
 
 ```
-final_score = normalize(platform_score) × source_multiplier × avg(keyword_multipliers) × recency_multiplier
+final_score = quality × bounded_preference × recency_nudge × game_client_nudge
 ```
 
 | 요소 | 설명 | 범위 |
@@ -88,7 +91,9 @@ final_score = normalize(platform_score) × source_multiplier × avg(keyword_mult
 | `RECENCY_MAX_AGE_DAYS` | 7 | 신선도 컷오프 |
 | `OVERFETCH_MULTIPLIER` | 4 | 목표 대비 요청 배수 |
 | `TOPUP_MAX_ROUNDS` | 2 | 목표 미달 시 추가 검색 횟수 |
-| `SEARCH_MAX_TOKENS` | 4096 | 서버사이드 검색 블록이 출력 예산을 잠식하므로 여유 필요 |
+| `SEARCH_MAX_TOKENS` | 16000 | thinking·검색 블록·JSON이 한 예산을 나눠 쓰므로 여유 필요 |
+| `REVIEW_MAX_TOKENS` | 16000 | 편집 심사 출력 예산. 잘리면 2배로 1회 재시도 |
+| `CLAUDE_EFFORT` | `medium` | thinking 분량 제어 (`low`~`max`) |
 | `EXCLUDE_URL_LOOKBACK_DAYS` | 45 | 중복 회피용 게시 이력 조회 기간 |
 | `HN_MIN_POINTS` | 30 | HN 후보 최소 점수 |
 | `FEED_MAX_PER_SOURCE` | 2 | 후보풀 소스별 상한 (발행량 많은 피드의 독식 방지) |
@@ -112,11 +117,11 @@ pip install -r requirements.txt
 DISCORD_BOT_TOKEN=봇_토큰
 DISCORD_CHANNEL_ID=채널_ID
 
-# 권장 (없거나 크레딧이 소진되면 HN/RSS 후보풀로 자동 폴백)
+# 필수 (웹 검색과 별도 품질 심사에 사용)
 ANTHROPIC_API_KEY=클로드_API_키
 
 # 선택
-CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_MODEL=claude-opus-5
 ALLOWED_USER_IDS=123456789,987654321   # 관리자 명령어 허용 유저 ID
 ```
 
@@ -124,8 +129,8 @@ ALLOWED_USER_IDS=123456789,987654321   # 관리자 명령어 허용 유저 ID
 |------|-----------|------|
 | `DISCORD_BOT_TOKEN` | 필수 | Discord Developer Portal에서 발급 |
 | `DISCORD_CHANNEL_ID` | 필수 | 뉴스를 게시할 채널의 ID |
-| `ANTHROPIC_API_KEY` | 권장 | Claude 웹 리서치 활성화. 없으면 HN/RSS 후보풀만으로 동작 |
-| `CLAUDE_MODEL` | 선택 | 기본값 `claude-sonnet-4-6` |
+| `ANTHROPIC_API_KEY` | 필수 | Claude 웹 리서치와 별도 품질 심사 활성화 |
+| `CLAUDE_MODEL` | 선택 | 기본값 `claude-opus-5` |
 | `ALLOWED_USER_IDS` | 선택 | 관리자 명령어를 허용할 유저 ID (쉼표 구분) |
 
 > `config.py`의 `YOUTUBE_API_KEY`, `REDDIT_CLIENT_ID/SECRET`, `THREADS_ACCESS_TOKEN`은
@@ -135,7 +140,7 @@ ALLOWED_USER_IDS=123456789,987654321   # 관리자 명령어 허용 유저 ID
 
 ```bash
 python main.py                          # 봇 실행
-python dry_run.py --count 3 --verbose   # Discord 없이 파이프라인만 실행
+python dry_run.py --count 2 --verbose   # Discord 없이 파이프라인만 실행
 ```
 
 `dry_run.py`는 기본적으로 `data/bot.db`에 씁니다. 실험할 때는 `--db data/tmp.db`로 임시 경로를 쓰세요.
@@ -146,7 +151,7 @@ python dry_run.py --count 3 --verbose   # Discord 없이 파이프라인만 실�
 
 | 명령어 | 권한 | 설명 |
 |--------|------|------|
-| `!more [n]` | 전체 | 추가 기사 n개 요청 (기본 3, 최대 10) |
+| `!more [n]` | 전체 | 추가 기사 n개 요청 (기본 2, 최대 2) |
 | `!stats` | 전체 | 봇 통계 및 학습된 선호도 현황 |
 | `!tokens` | 전체 | Claude 토큰 사용량 (오늘/5시간 윈도우/전체 평균) |
 | `!help_ai` | 전체 | 명령어 목록 |

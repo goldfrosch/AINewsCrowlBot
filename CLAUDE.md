@@ -8,7 +8,7 @@
 ## Tech Stack
 
 - Python 3.11+ / pip / SQLite (`data/bot.db`)
-- discord.py 2.x · Anthropic SDK · `web_search_20260209` (기본 모델 `claude-sonnet-4-6`)
+- discord.py 2.x · Anthropic SDK · `web_search_20260209` (기본 모델 `claude-opus-5`)
 - feedparser / requests — HN·RSS 후보풀
 
 ## File Map
@@ -52,7 +52,7 @@ python -m ruff check --fix . && python -m ruff format .
 ## Environment Variables
 
 필수: `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID`
-권장: `ANTHROPIC_API_KEY` (없거나 크레딧 소진 시 HN/RSS 후보풀로 자동 폴백)
+필수: `ANTHROPIC_API_KEY` (웹 검색과 별도 품질 심사에 사용)
 선택: `CLAUDE_MODEL`, `ALLOWED_USER_IDS`
 
 ## 수집 파이프라인
@@ -64,7 +64,8 @@ python -m ruff check --fix . && python -m ruff format .
 3. crawlers.feed_pool   1·2번 결과가 목표 미달일 때 HN(30점 이상)·RSS로 보충
 ```
 
-수집 경로가 2개라 한쪽이 완전히 죽어도(예: API 크레딧 소진) 브리핑이 0건이 되지 않는다.
+검색 경로는 2개라 웹 검색만 실패하면 feed로 보충한다. 단, 공통 품질 심사에 필요한
+Anthropic API를 사용할 수 없으면 검수되지 않은 기사를 게시하지 않는다.
 
 ## 신선도 정책 (중요)
 
@@ -91,7 +92,9 @@ python -m ruff check --fix . && python -m ruff format .
 | `RECENCY_MAX_AGE_DAYS` | 7 | 신선도 컷오프 |
 | `OVERFETCH_MULTIPLIER` | 4 | 목표 대비 요청 배수 |
 | `TOPUP_MAX_ROUNDS` | 2 | 목표 미달 시 추가 검색 횟수 |
-| `SEARCH_MAX_TOKENS` | 4096 | 서버사이드 검색 블록이 출력 예산을 잠식하므로 여유 필요 |
+| `SEARCH_MAX_TOKENS` | 16000 | thinking·검색 블록·JSON이 한 예산을 나눠 쓰므로 여유 필요 |
+| `REVIEW_MAX_TOKENS` | 16000 | 편집 심사 출력 예산. 잘리면 2배로 1회 재시도 |
+| `CLAUDE_EFFORT` | `medium` | thinking 분량 제어 (`low`~`max`) |
 | `EXCLUDE_URL_LOOKBACK_DAYS` | 45 | 중복 회피용 게시 이력 조회 기간 |
 | `FEED_MAX_PER_SOURCE` | 2 | 후보풀 소스별 상한 |
 
