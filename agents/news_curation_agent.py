@@ -31,6 +31,7 @@ from agents.agent_spec import DEFAULT_TOPICS, get_topic_keys, topics_for_round
 from agents.search_prompt import build_search_prompt
 from config import (
     ANTHROPIC_API_KEY,
+    ARTICLES_PER_POST,
     OVERFETCH_MAX,
     OVERFETCH_MIN,
     OVERFETCH_MULTIPLIER,
@@ -174,7 +175,7 @@ def _apply_external_preferences(preferences: dict, external: dict | None) -> dic
 
 
 def run(
-    target_count: int = 3,
+    target_count: int = ARTICLES_PER_POST,
     topics: list[str] | None = None,
     external_preferences: dict | None = None,
     intent: dict | None = None,
@@ -248,7 +249,9 @@ def run(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI 뉴스 큐레이션 에이전트")
-    parser.add_argument("--count", type=int, default=3, help="선별할 기사 수 (기본: 3)")
+    parser.add_argument(
+        "--count", type=int, default=ARTICLES_PER_POST, help=f"선별할 기사 수 (기본: {ARTICLES_PER_POST})"
+    )
     parser.add_argument(
         "--topics", type=str, default="", help=f"탐색 토픽 콤마 구분 (기본: {','.join(DEFAULT_TOPICS)})"
     )

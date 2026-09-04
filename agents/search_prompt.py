@@ -18,7 +18,8 @@ from config import EXCLUDE_URL_PROMPT_LIMIT, WEB_SEARCH_MAX_USES
 _KEYWORD_VOCAB = (
     "claude, chatgpt, gpt-4, gemini, llm, prompt engineering, rag, fine-tuning, mcp, "
     "ai agent, agentic, langchain, vector database, embedding, ai coding, openai, anthropic, "
-    "ai game development, ai game art, ai game ui, procedural generation, ai animation, ai sound design"
+    "ai game development, game client, unreal, unity, godot, ai game art, ai game ui, "
+    "game asset workflow, procedural generation, ai animation, ai sound design"
 )
 
 _OUTPUT_SCHEMA = (
@@ -114,7 +115,13 @@ def build_search_prompt(
         "If you cannot verify it, omit the article entirely.",
         "- Do NOT return undated evergreen pages, docs pages, or 'awesome-list' repos.",
         "- Within the window, prefer tutorials, case studies, and posts with concrete techniques.",
-        "- Real articles only, no sponsored content, no press releases.",
+        "- Treat Unreal, Unity, and Godot equally; do not require one engine to appear in the results.",
+        "- For game content, focus on workflows ordinary game client programmers can reproduce: code, 3D, "
+        "textures, UI/UX, animation, sound, and asset integration.",
+        "- Exclude papers, preprints, academic abstracts, sponsored content, press releases, generic AI news, "
+        "and shallow listicles.",
+        "- Exclude Chinese-language pages. A Chinese-owned source is acceptable when the article itself is "
+        "written in English or Korean.",
         f"- Run at most {WEB_SEARCH_MAX_USES} targeted searches, then output JSON.",
     ]
 

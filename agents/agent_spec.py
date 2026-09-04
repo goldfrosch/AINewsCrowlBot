@@ -47,6 +47,7 @@ _SPEC = _load_agent_spec()
 TOPIC_DESC: dict[str, str] = _SPEC["topics"]
 DEFAULT_TOPICS: list[str] = _SPEC["default_topics"]
 SKILL_FINDER: str = load_skill("article-finder")
+SKILL_REVIEWER: str = load_skill("article-reviewer")
 
 
 def get_topic_keys() -> set[str]:
