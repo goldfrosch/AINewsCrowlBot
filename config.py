@@ -33,8 +33,8 @@ PREFERENCE_ANALYSIS_HOUR = 2  # 새벽 2시 KST: 선호도 분석
 DAILY_POST_HOUR = 6  # 오전 6시 KST: 뉴스 브리핑
 
 # ── 게시 설정 ─────────────────────────────────────
-ARTICLES_PER_POST = 3  # 하루 기본 게시 수
-MORE_ARTICLES_MAX = 10  # !more 최대 요청 수
+ARTICLES_PER_POST = 2  # 품질 기준을 통과한 기사만 하루 최대 2개 게시
+MORE_ARTICLES_MAX = 2  # 수동 요청도 한 번에 최대 2개
 MAX_PER_SOURCE = 10  # 소스당 최대 수집 수
 
 # ── 랭킹 정규화 ───────────────────────────────────
@@ -239,8 +239,6 @@ YOUTUBE_SEARCH_QUERIES = [
 RSS_FEEDS: dict[str, str] = {
     "VentureBeat AI": "https://venturebeat.com/category/ai/feed/",
     "The Verge AI": "https://www.theverge.com/ai-artificial-intelligence/rss/index.xml",
-    "ArXiv cs.AI": "https://export.arxiv.org/rss/cs.AI",
-    "ArXiv cs.LG": "https://export.arxiv.org/rss/cs.LG",
     "Medium AI": "https://medium.com/feed/tag/artificial-intelligence",
     "ZDNet Korea": "https://zdnet.co.kr/rss/",
     "IT조선": "https://it.chosun.com/section/rss/all.php",
@@ -249,7 +247,6 @@ RSS_FEEDS: dict[str, str] = {
     "80 Level": "https://80.lv/feed/",
     "Game Developer": "https://www.gamedeveloper.com/rss.xml",
     "GDC Blog": "https://gdconf.com/rss.xml",
-    "ArXiv cs.GR": "https://export.arxiv.org/rss/cs.GR",
     # Reddit r/gamedev RSS는 아티클 피드가 아니라 토론 피드라서 제외했다.
     # (QA에서 "Scam alert? I am getting a lot of PM in discord..." 같은 잡담이
     #  게시 후보로 올라왔다.) Reddit은 HN처럼 점수 기반 필터가 있어야 쓸 수 있다.
@@ -259,9 +256,6 @@ RSS_FEEDS: dict[str, str] = {
 RSS_NO_FILTER_SOURCES = {
     "VentureBeat AI",
     "The Verge AI",
-    "ArXiv cs.AI",
-    "ArXiv cs.LG",
-    "ArXiv cs.GR",
     "Medium AI",
     "80 Level",
     "Game Developer",
