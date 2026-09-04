@@ -32,6 +32,21 @@ class TestExtractJsonArray:
         assert result[0]["url"] == "a"
         assert result[0]["keywords"] == ["k1", "k2"]
 
+    def test_empty_nested_array_does_not_shadow_outer(self):
+        """마지막 기사의 빈 keywords/engines 배열이 응답 전체를 가려버리던 버그 회귀 방지.
+
+        실측 피해: 편집 심사 응답에서 REJECT 항목의 "keywords": []가 마지막
+        후보로 채택돼 파싱 결과가 항상 []가 되고, 그날 브리핑이 조용히 0건이 됐다.
+        """
+        text = (
+            '[{"url":"a","verdict":"KEEP","keywords":["k1"]},{"url":"b","verdict":"REJECT","engines":[],"keywords":[]}]'
+        )
+        result = _extract_json_array(text)
+
+        assert len(result) == 2
+        assert result[0]["url"] == "a"
+        assert result[1]["verdict"] == "REJECT"
+
     def test_bracket_inside_description(self):
         """description에 '['가 있어도 바깥 배열을 정확히 잡아야 한다."""
         text = '[{"url":"a","title":"t","description":"see [docs] here"}]'

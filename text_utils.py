@@ -15,19 +15,21 @@ def extract_json_array(text: str) -> list[dict]:
     """응답 텍스트에서 바깥 JSON 배열을 추출한다.
 
     '['부터 브래킷 매칭하여 유효한 바깥 배열 후보를 모두 찾고,
-    모델 응답 끝부분의 최종 JSON 배열을 우선 사용한다.
-    dict 원소가 아닌 배열(예: `["kw1","kw2"]`)은 후보에서 제외하므로
-    중첩된 keywords 배열을 오인하지 않는다.
+    그중 **텍스트 범위가 가장 넓은** 배열을 채택한다.
+    dict 원소가 아닌 배열(예: `["kw1","kw2"]`)은 후보에서 제외되지만,
+    빈 배열(`"keywords": []`)은 후보가 되므로 "마지막 후보"를 채택하면
+    마지막 기사의 빈 keywords 배열을 응답 전체로 오인했다. 바깥 배열은
+    항상 내부 배열보다 범위가 넓으므로 최대 범위 선택으로 이를 방지한다.
 
     Returns:
         dict 리스트. 유효한 배열이 없으면 빈 리스트.
     """
     pos = 0
-    candidates: list[list[dict]] = []
+    best: tuple[int, list[dict]] | None = None  # (텍스트 범위, 파싱 결과)
     while True:
         start = text.find("[", pos)
         if start == -1:
-            return candidates[-1] if candidates else []
+            return best[1] if best else []
 
         depth = 0
         end = -1
@@ -47,7 +49,10 @@ def extract_json_array(text: str) -> list[dict]:
         try:
             result = json.loads(text[start:end])
             if isinstance(result, list) and (not result or isinstance(result[0], dict)):
-                candidates.append(result)
+                span = end - start
+                # 동률이면 뒤 후보 승리: 프리앰블 예시 배열 뒤의 최종 배열을 채택하는 기존 계약.
+                if best is None or span >= best[0]:
+                    best = (span, result)
         except json.JSONDecodeError:
             pass
 
