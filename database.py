@@ -210,8 +210,9 @@ def upsert_article(article: dict) -> bool:
         return False
 
 
-def get_pending_articles(limit: int = 50) -> list[dict]:
+def get_pending_articles(limit: int = 50, max_age_days: int | None = None) -> list[dict]:
     """아직 게시 안 된 기사를 final_score 내림차순으로 반환. keywords는 list[str]."""
+    cutoff = f"-{max(int(max_age_days), 0)} days" if max_age_days is not None else None
     with _db() as conn:
         rows = conn.execute(
             """
@@ -220,11 +221,12 @@ def get_pending_articles(limit: int = 50) -> list[dict]:
             LEFT JOIN article_keywords ak ON ak.article_id = a.id
             LEFT JOIN keywords k ON ak.keyword_id = k.id
             WHERE a.status = 'pending'
+              AND (? IS NULL OR a.published_at = '' OR date(a.published_at) >= date('now', '+9 hours', ?))
             GROUP BY a.id
             ORDER BY a.final_score DESC, a.platform_score DESC, a.crawled_at DESC
             LIMIT ?
             """,
-            (limit,),
+            (cutoff, cutoff, limit),
         ).fetchall()
     return _rows_with_keywords(rows)
 
@@ -416,6 +418,23 @@ def get_recent_posted_urls(days: int = EXCLUDE_URL_LOOKBACK_DAYS) -> list[str]:
             (f"-{lookback} days",),
         ).fetchall()
     return [r["url"] for r in rows]
+
+
+def get_recent_posted_titles(days: int = EXCLUDE_URL_LOOKBACK_DAYS) -> list[str]:
+    """최근 게시 제목을 최신순으로 반환해 주제 근중복 검증에 사용한다."""
+    lookback = max(int(days), 0)
+    with _db() as conn:
+        rows = conn.execute(
+            """
+            SELECT title FROM articles
+            WHERE status = 'posted'
+              AND posted_at IS NOT NULL
+              AND date(posted_at) >= date('now', '+9 hours', ?)
+            ORDER BY posted_at DESC
+            """,
+            (f"-{lookback} days",),
+        ).fetchall()
+    return [r["title"] for r in rows]
 
 
 def get_all_article_urls() -> set[str]:
