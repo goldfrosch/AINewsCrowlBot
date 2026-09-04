@@ -88,21 +88,53 @@ def _make_embed(article: dict, is_ai_curated: bool = False) -> discord.Embed:
         color=color,
     )
 
-    if article.get("description"):
-        embed.description = article["description"][:400]
+    description = article.get("description") or ""
+    original_title = ""
+    description_lines = []
+    for line in description.splitlines():
+        if line.startswith("원문 제목:"):
+            original_title = line.removeprefix("원문 제목:").strip()
+        else:
+            description_lines.append(line)
+    cleaned_description = "\n".join(description_lines).strip()
+    if cleaned_description:
+        embed.description = cleaned_description[:400]
 
     # 필드 구성
     source_val = article["source"]
     if is_ai_curated:
         source_val += "  ·  🧠 Claude 리서치"
-    embed.add_field(name="출처", value=source_val, inline=True)
+    embed.add_field(name="출처", value=source_val[:200], inline=True)
 
     if article.get("author"):
         embed.add_field(name="작성자", value=article["author"][:60], inline=True)
 
     score = article.get("platform_score", 0)
-    if 0 < score < 100:  # Claude 큐레이션(100)은 점수 필드 숨김
+    if is_ai_curated and score:
+        embed.add_field(name="품질 점수", value=f"{int(score)}", inline=True)
+    elif 0 < score < 100:
         embed.add_field(name="점수", value=f"{int(score):,}", inline=True)
+
+    if original_title:
+        embed.add_field(name="원문 제목", value=original_title[:250], inline=False)
+
+    keywords = article.get("keywords") or []
+    content_labels = {
+        "ai_programming": "AI 프로그래밍",
+        "game_asset_workflow": "게임 에셋 워크플로",
+    }
+    content_type = next((content_labels[keyword] for keyword in keywords if keyword in content_labels), "")
+    if content_type:
+        embed.add_field(name="분류", value=content_type, inline=True)
+
+    engine_names = {"unreal": "Unreal", "unity": "Unity", "godot": "Godot", "cross-engine": "Cross-engine"}
+    engines = [
+        engine_names[keyword[7:]]
+        for keyword in keywords
+        if keyword.startswith("engine:") and keyword[7:] in engine_names
+    ]
+    if engines:
+        embed.add_field(name="엔진", value=" · ".join(dict.fromkeys(engines)), inline=True)
 
     if article.get("image_url"):
         embed.set_thumbnail(url=article["image_url"])
@@ -125,7 +157,8 @@ def _summary_message(result: dict, count: int) -> str:
     )
     lines.append(
         f"수집 {result.get('raw_count', 0)} · 기한초과 {result.get('stale_dropped', 0)} 제외 · "
-        f"신규 {result.get('new_count', 0)} · feed 보충 {result.get('feed_topup', 0)}"
+        f"품질탈락 {result.get('quality_dropped', 0)} · 신규 {result.get('new_count', 0)} · "
+        f"feed 보충 {result.get('feed_topup', 0)}"
     )
     return "\n".join(lines)
 
@@ -140,6 +173,10 @@ def _failure_message(result: dict, count: int) -> str:
         return (
             f"📭 수집한 {result['raw_count']}개가 전부 기한초과"
             f"(최근 {result.get('max_age_days', '?')}일 기준)로 제외됐습니다."
+        )
+    if result.get("quality_dropped", 0):
+        return (
+            f"📭 수집한 기사들이 본문·언어·실용성 품질 기준을 통과하지 못했습니다. (탈락 {result['quality_dropped']}개)"
         )
     return f"📭 게시할 새 기사가 없습니다 — 수집 {result.get('raw_count', 0)}개가 모두 기존 게시분과 중복입니다."
 
@@ -274,7 +311,7 @@ def is_admin_or_allowed():
 
 @bot.command(name="more")
 async def cmd_more(ctx: commands.Context, count: int = ARTICLES_PER_POST):
-    """추가 기사를 가져옵니다. 예: !more 3"""
+    """추가 기사를 가져옵니다. 예: !more 2"""
     count = max(1, min(count, MORE_ARTICLES_MAX))
     await _research_and_post(ctx.channel, count=count, is_daily=False)
 
@@ -446,7 +483,7 @@ async def cmd_help(ctx: commands.Context):
     embed.add_field(
         name="일반",
         value=(
-            "`!more [n]`  — 추가 기사 n개 요청 (기본 3, 최대 10)\n"
+            f"`!more [n]`  — 추가 기사 n개 요청 (기본 {ARTICLES_PER_POST}, 최대 {MORE_ARTICLES_MAX})\n"
             "`!stats`     — 봇 통계 및 선호도 현황\n"
             "`!tokens`    — Claude 토큰 사용량 (오늘/윈도우/평균)\n"
             "`!help_ai`   — 이 도움말"
