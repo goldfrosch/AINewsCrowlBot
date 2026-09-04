@@ -80,6 +80,10 @@ def test_pipeline_publishes_only_reviewed_articles_and_caps_at_two(mocker, tmp_d
     assert len(result["articles"]) == 2
     assert result["quality_dropped"] == 1
     assert all("게임 클라이언트" in article["title"] for article in result["articles"])
+    # 목 함수가 report를 채우지 않아도 통계 키는 항상 존재해야 한다 (0건 원인 규명용).
+    assert result["stages"]["verify_attempted"] == 0
+    assert result["stages"]["review_candidates"] == 0
+    assert result["stages"]["reason_counts"] == {}
 
     import database as db
 

@@ -63,13 +63,43 @@ def _select(count: int, max_age_days: int) -> list[dict]:
     return ranked[:count]
 
 
-def _review_candidates(articles, max_age_days: int, recent_titles: list[str]):
-    verified = article_quality.verify_articles(articles, max_age_days)
+def _new_stage_report() -> dict:
+    """단계별 손실 통계. 0건 원인 규명을 위해 모든 게이트의 통과율을 추적한다."""
+    return {
+        "verify_attempted": 0,
+        "verify_passed": 0,
+        "dup_removed": 0,
+        "review_candidates": 0,
+        "review_kept": 0,
+        "review_rejected": 0,
+        "reason_counts": {},
+    }
+
+
+def _merge_stage_report(stages: dict, verify: dict, review: dict, dup_removed: int) -> None:
+    stages["verify_attempted"] += verify.get("attempted", 0)
+    stages["verify_passed"] += verify.get("passed", 0)
+    stages["dup_removed"] += dup_removed
+    candidates = review.get("candidates", 0)
+    kept = review.get("kept", 0)
+    stages["review_candidates"] += candidates
+    stages["review_kept"] += kept
+    stages["review_rejected"] += candidates - kept
+    for reason, count in (review.get("reasons") or {}).items():
+        stages["reason_counts"][reason] = stages["reason_counts"].get(reason, 0) + count
+
+
+def _review_candidates(articles, max_age_days: int, recent_titles: list[str], stages: dict):
+    verify_report: dict = {}
+    verified = article_quality.verify_articles(articles, max_age_days, report=verify_report)
     unique = article_quality.remove_near_duplicates(verified, recent_titles)
-    return editorial_review.review_articles(unique)
+    review_report: dict = {}
+    reviewed = editorial_review.review_articles(unique, report=review_report)
+    _merge_stage_report(stages, verify_report, review_report, len(verified) - len(unique))
+    return reviewed
 
 
-def _topup_from_feeds(shortfall: int, max_age_days: int) -> tuple[int, int]:
+def _topup_from_feeds(shortfall: int, max_age_days: int, stages: dict) -> tuple[int, int]:
     """HN/RSS 후보도 본문 검증과 편집 심사를 거쳐 부족분을 채운다.
 
     남는 기사가 저수지에 쌓여 다음 날 랭킹을 왜곡하지 않도록
@@ -80,7 +110,7 @@ def _topup_from_feeds(shortfall: int, max_age_days: int) -> tuple[int, int]:
 
     known = db.get_all_article_urls()
     candidates = feed_pool.collect(shortfall * 2, exclude_urls=known, max_age_days=max_age_days)
-    reviewed = _review_candidates(candidates, max_age_days, db.get_recent_posted_titles())
+    reviewed = _review_candidates(candidates, max_age_days, db.get_recent_posted_titles(), stages)
     reviewed.sort(key=lambda article: article.platform_score, reverse=True)
     inserted = _store(reviewed[:shortfall])
     quality_dropped = len(candidates) - len(reviewed)
@@ -106,6 +136,7 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
             "feed_topup":    int,         # HN/RSS로 보충한 수
             "max_age_days":  int,         # 적용된 신선도 컷오프
             "error":         str | None,  # curator 에러 (보충 성공 시에도 유지)
+            "stages":        dict,        # 단계별 통과율·탈락 사유 (본문검증/심사)
         }
     """
     target_count = min(max(count, 0), ARTICLES_PER_POST)
@@ -137,7 +168,8 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
     if stale_dropped:
         print(f"[Pipeline] 기한초과 {stale_dropped}개 제외 (최근 {max_age_days}일 기준)")
 
-    reviewed_articles = _review_candidates(fresh_articles, max_age_days, db.get_recent_posted_titles())
+    stages = _new_stage_report()
+    reviewed_articles = _review_candidates(fresh_articles, max_age_days, db.get_recent_posted_titles(), stages)
     quality_dropped = len(fresh_articles) - len(reviewed_articles)
     new_count = _store(reviewed_articles)
     print(
@@ -149,7 +181,7 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
 
     feed_topup = 0
     if len(final) < target_count:
-        feed_topup, feed_quality_dropped = _topup_from_feeds(target_count - len(final), max_age_days)
+        feed_topup, feed_quality_dropped = _topup_from_feeds(target_count - len(final), max_age_days, stages)
         quality_dropped += feed_quality_dropped
         if feed_topup:
             final = _select(target_count, max_age_days)
@@ -166,4 +198,5 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
         "feed_topup": feed_topup,
         "max_age_days": max_age_days,
         "error": error,
+        "stages": stages,
     }

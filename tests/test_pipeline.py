@@ -30,7 +30,10 @@ def no_network_feeds(mocker):
 def pass_quality_gate(mocker):
     """Legacy pipeline scenarios isolate storage/ranking from network and LLM review."""
 
-    def verify(articles, max_age_days):
+    def verify(articles, max_age_days, report=None):
+        if report is not None:
+            report["attempted"] = len(articles)
+            report["passed"] = len(articles)
         return [
             VerifiedArticle(
                 article=article,
@@ -43,7 +46,10 @@ def pass_quality_gate(mocker):
             for article in articles
         ]
 
-    def review(candidates):
+    def review(candidates, report=None):
+        if report is not None:
+            report["candidates"] = len(candidates)
+            report["kept"] = len(candidates)
         return [
             Article(
                 url=candidate.canonical_url,
