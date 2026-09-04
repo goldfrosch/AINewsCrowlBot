@@ -2,7 +2,7 @@
 기사 순위 계산 및 피드백 처리
 
 순위 공식:
-  final_score = normalize(platform_score) × source_multiplier × avg(keyword_multipliers) × recency_multiplier
+  final_score = quality × bounded_preference × recency_nudge × game_client_nudge
 
 - platform_score: 모든 프로듀서(Claude 웹 검색 / HN / RSS)가 0~100 밴드로 emit → 0~1 정규화
 - source_multiplier: 👍/👎 누적 기반, 기본 1.0 (범위 0.1~5.0)
@@ -155,9 +155,11 @@ def rank_articles(articles: list[dict]) -> list[dict]:
         kws = [db.canonical_keyword(kw) for kw in _get_article_keywords(a)]
         kws = [kw for kw in kws if kw]
         kw_m = sum(keyword_mult.get(kw, 1.0) for kw in kws) / len(kws) if kws else 1.0
-        rec_m = recency.recency_multiplier(a.get("published_at"))
+        preference = max(0.85, min(1.15, (src_m + kw_m) / 2))
+        recency_nudge = 1 + (recency.recency_multiplier(a.get("published_at")) - 1) * 0.15
+        game_client_nudge = 1.04 if "game_client" in kws else 1.0
 
-        a["final_score"] = round(base * src_m * kw_m * rec_m, 6)
+        a["final_score"] = round(base * preference * recency_nudge * game_client_nudge, 6)
 
     articles.sort(key=lambda a: a["final_score"], reverse=True)
     db.update_final_scores(articles)

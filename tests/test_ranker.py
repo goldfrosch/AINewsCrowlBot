@@ -144,6 +144,54 @@ class TestRankArticles:
         result = rank_articles(articles)
         assert result[0]["title"] == "WithLLM"
 
+    def test_quality_dominates_small_recency_difference(self, mocker):
+        mocker.patch("ranker.db.get_all_preferences", return_value={"sources": [], "keywords": []})
+        mocker.patch("ranker.db.update_final_scores")
+        articles = [
+            {
+                "source": "X",
+                "platform_score": 90.0,
+                "keywords": [],
+                "title": "Higher quality",
+                "published_at": days_ago(3),
+            },
+            {
+                "source": "X",
+                "platform_score": 76.0,
+                "keywords": [],
+                "title": "Fresher but weaker",
+                "published_at": days_ago(0),
+            },
+        ]
+
+        result = rank_articles(articles)
+
+        assert result[0]["title"] == "Higher quality"
+
+    def test_game_client_relevance_breaks_close_quality_tie(self, mocker):
+        mocker.patch("ranker.db.get_all_preferences", return_value={"sources": [], "keywords": []})
+        mocker.patch("ranker.db.update_final_scores")
+        articles = [
+            {
+                "source": "X",
+                "platform_score": 88.0,
+                "keywords": ["general"],
+                "title": "General programming",
+                "published_at": days_ago(1),
+            },
+            {
+                "source": "X",
+                "platform_score": 86.0,
+                "keywords": ["game_client", "engine:godot"],
+                "title": "Godot client workflow",
+                "published_at": days_ago(1),
+            },
+        ]
+
+        result = rank_articles(articles)
+
+        assert result[0]["title"] == "Godot client workflow"
+
 
 class TestRecencyRanking:
     def _prefs(self, mocker):
