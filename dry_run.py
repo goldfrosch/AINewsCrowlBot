@@ -2,8 +2,8 @@
 CLI dry-run: Discord 없이 큐레이션 파이프라인을 실행합니다.
 
 Usage:
-    python dry_run.py                  # 기본 5개
-    python dry_run.py --count 3        # 3개만
+    python dry_run.py                  # 기본 2개
+    python dry_run.py --count 1        # 1개만
     python dry_run.py --verbose        # 상세 출력
     python dry_run.py --db data/bot.db # DB 경로 지정
 
@@ -19,12 +19,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import database as db
+from config import ARTICLES_PER_POST
 from pipeline import run_curation_pipeline
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="AINewsCrowlBot dry-run (no Discord)")
-    parser.add_argument("--count", type=int, default=3, help="수집할 기사 수 (기본 3)")
+    parser.add_argument(
+        "--count", type=int, default=ARTICLES_PER_POST, help=f"수집할 기사 수 (기본 {ARTICLES_PER_POST})"
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="상세 출력")
     parser.add_argument("--db", type=str, default="data/bot.db", help="DB 경로")
     args = parser.parse_args()
@@ -41,6 +46,7 @@ def main():
 
     print("\n[Dry Run] 결과 요약:")
     print(f"  - curator 반환: {result['raw_count']}개")
+    print(f"  - 품질 기준 탈락: {result.get('quality_dropped', 0)}개")
     print(f"  - DB 신규 저장: {result['new_count']}개")
     print(f"  - 랭킹 후 게시 대상: {len(result['articles'])}개")
 
