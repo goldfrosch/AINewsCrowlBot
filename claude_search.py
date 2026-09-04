@@ -19,6 +19,7 @@ import anthropic
 
 import token_tracker
 from config import (
+    CLAUDE_EFFORT,
     CLAUDE_MODEL,
     SEARCH_MAX_TOKENS,
     WEB_SEARCH_ALLOWED_CALLERS,
@@ -76,6 +77,7 @@ def _invoke(client, *, prompt: str, system_blocks, caller: str, max_tokens: int,
         with client.messages.stream(
             model=CLAUDE_MODEL,
             max_tokens=max_tokens,
+            output_config={"effort": CLAUDE_EFFORT},
             tools=[web_search_tool(max_uses)],
             system=system_blocks,
             messages=messages,

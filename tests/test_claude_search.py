@@ -5,6 +5,7 @@ import json
 import anthropic
 
 import claude_search
+import config
 
 _SYSTEM = [{"type": "text", "text": "sys"}]
 
@@ -44,6 +45,15 @@ class TestSearchArticles:
         outcome = claude_search.search_articles(client, prompt="p", system_blocks=_SYSTEM, caller="t")
         assert [a["url"] for a in outcome.articles] == ["https://a"]
         assert outcome.truncated is False
+
+    def test_declares_thinking_budget_and_effort(self, mocker):
+        """thinking이 max_tokens를 나눠 쓰므로 예산과 effort를 명시해야 잘리지 않는다."""
+        client = _client(mocker, _response(mocker, _payload("https://a")))
+        claude_search.search_articles(client, prompt="p", system_blocks=_SYSTEM, caller="t")
+
+        kwargs = client.messages.stream.call_args_list[0].kwargs
+        assert kwargs["max_tokens"] == config.SEARCH_MAX_TOKENS
+        assert kwargs["output_config"] == {"effort": config.CLAUDE_EFFORT}
 
     def test_joins_multiple_text_blocks(self, mocker):
         """JSON이 두 번째 text 블록에 있어도 찾아야 한다 (첫 블록만 보던 버그)."""
