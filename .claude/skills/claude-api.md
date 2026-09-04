@@ -8,9 +8,16 @@ source: https://skills.sh/anthropics/skills/claude-api
 
 ## 기본 원칙
 
-- **기본 모델**: `claude-opus-4-6` (명시적 지시 없으면 항상 이 모델 사용)
-- **Thinking**: `thinking={"type": "adaptive"}` — `"enabled"` 방식은 더 이상 사용하지 않음
-- **Streaming**: 긴 입출력에는 반드시 `client.messages.stream()` 사용 (타임아웃 방지)
+- **기본 모델**: `claude-opus-5` (명시적 지시 없으면 항상 이 모델 사용)
+- **Thinking**: Opus 5는 **기본 활성**이다. `thinking={"type": "adaptive"}`를 쓰고 `"enabled"` 방식은 사용하지 않음
+- **max_tokens는 thinking + 응답 텍스트 합산 하드 캡**이다. 기존 모델 기준으로 잡은 예산을 그대로 쓰면
+  JSON이 잘려 `stop_reason == "max_tokens"`가 되고, 파서가 조용히 0건을 반환한다
+- **Effort**: `output_config={"effort": "medium"}`으로 thinking 분량을 통제한다.
+  SDK 0.86.0의 허용값은 `low` / `medium` / `high` / `max` (`xhigh`는 타입에 아직 없음).
+  `xhigh`·`max`는 `thinking={"type": "disabled"}`와 함께 쓸 수 없다 (400)
+- **Streaming**: 긴 입출력에는 반드시 `client.messages.stream()` 사용.
+  비스트리밍은 SDK가 `max_tokens` 약 21,300 초과 시 `ValueError`를 던진다
+- **Opus 5 미지원**: `web_fetch` 도구, Priority Tier (`web_search`는 정상 동작)
 
 ## 언제 어떤 방식을 쓸까
 
@@ -42,13 +49,12 @@ tools=[{"type": "web_search_20260209", "name": "web_search"}]
 
 이 프로젝트에서의 에러 처리 패턴: `curator.py` `_research_round()` 참조.
 
-## 모델 가격표 (2026-02-17)
+## 모델 가격표 (2026-09-04)
 
-| 모델       | ID                          | 입력  | 출력   | 컨텍스트       |
-| ---------- | --------------------------- | ----- | ------ | -------------- |
-| Opus 4.6   | `claude-opus-4-6`           | $5/1M | $25/1M | 200K (1M beta) |
-| Sonnet 4.6 | `claude-sonnet-4-6`         | $3/1M | $15/1M | 200K (1M beta) |
-| Haiku 4.5  | `claude-haiku-4-5-20251001` | $1/1M | $5/1M  | 200K           |
+| 모델       | ID                  | 입력  | 출력   | 컨텍스트 |
+| ---------- | ------------------- | ----- | ------ | -------- |
+| Opus 5     | `claude-opus-5`     | $5/1M | $25/1M | 1M       |
+| Sonnet 4.6 | `claude-sonnet-4-6` | $3/1M | $15/1M | 200K     |
 
 ## 이 프로젝트에서의 사용 위치
 

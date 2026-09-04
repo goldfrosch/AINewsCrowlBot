@@ -17,6 +17,8 @@ Output ONLY valid JSON — no explanation, no preamble.
 | 기준 | 처리 |
 |------|------|
 | 스팸·광고 ("sponsored", "buy now", "sign up" 등) | 즉시 REJECT |
+| 논문·프리프린트·학술 초록 | 즉시 REJECT |
+| 중국어 본문 | 즉시 REJECT (중국계 출처의 영어·한국어 본문은 허용) |
 | 단순 뉴스 (모델 발표·기업 소식만, 개발자 활용법 없음) | REJECT |
 | 실용성 없음 (코드 예시·구체적 기법·재현 가능한 팁 없음) | 감점 |
 | 중복 이벤트 (동일 주제·기법 아티클 ≥ 2개) | 최선 1개만 KEEP |
@@ -45,6 +47,7 @@ Output ONLY valid JSON — no explanation, no preamble.
 7. REJECT: 근중복 (같은 기법을 다룬 아티클이 여러 개 → 최선 1개만 유지)
 8. REJECT: 단순 게임 플레이 AI (체스·바둑 AI 등) — 게임 "개발"에 활용하는 사례가 아닌 경우 제외
 9. PREFER: 1차 소스·실무자 블로그·공식 문서 > 어그리게이터 사이트
+10. ENGINE NEUTRAL: Unreal·Unity·Godot을 동등하게 평가하고 특정 엔진을 강제하지 않음
 
 ## 출력 형식
 
