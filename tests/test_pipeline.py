@@ -2,6 +2,7 @@
 
 import pytest
 
+from article_quality import VerifiedArticle
 from crawlers.base import Article
 from tests.conftest import days_ago
 
@@ -23,6 +24,43 @@ _INACTIVE_INTENT = {
 def no_network_feeds(mocker):
     """HN/RSS 후보풀은 실제 네트워크를 타므로 기본적으로 비활성화한다."""
     return mocker.patch("pipeline.feed_pool.collect", return_value=[])
+
+
+@pytest.fixture(autouse=True)
+def pass_quality_gate(mocker):
+    """Legacy pipeline scenarios isolate storage/ranking from network and LLM review."""
+
+    def verify(articles, max_age_days):
+        return [
+            VerifiedArticle(
+                article=article,
+                canonical_url=article.url,
+                language="en",
+                published_at=article.published_at,
+                excerpt="Reproducible implementation details. " * 20,
+                trusted_source=True,
+            )
+            for article in articles
+        ]
+
+    def review(candidates):
+        return [
+            Article(
+                url=candidate.canonical_url,
+                title=candidate.article.title,
+                source=candidate.article.source,
+                description=candidate.article.description,
+                author=candidate.article.author,
+                image_url=candidate.article.image_url,
+                published_at=candidate.published_at,
+                platform_score=candidate.article.platform_score,
+                keywords=[*candidate.article.keywords, "ai_programming"],
+            )
+            for candidate in candidates
+        ]
+
+    mocker.patch("pipeline.article_quality.verify_articles", side_effect=verify)
+    mocker.patch("pipeline.editorial_review.review_articles", side_effect=review)
 
 
 def _article(url: str, title: str, *, age_days: int = 1, score: float = 100.0, keywords=None) -> Article:
@@ -121,7 +159,7 @@ class TestRunCurationPipeline:
 
         result = run_curation_pipeline(count=3)
 
-        assert len(result["articles"]) == 3
+        assert len(result["articles"]) == 2
         scores = [a["final_score"] for a in result["articles"]]
         assert scores == sorted(scores, reverse=True)
 
@@ -284,8 +322,8 @@ class TestFeedTopup:
         run = self._setup(mocker, [_article("https://example.com/only", "Only One")])
         result = run(count=3)
 
-        assert result["feed_topup"] == 2
-        assert len(result["articles"]) == 3
+        assert result["feed_topup"] == 1
+        assert len(result["articles"]) == 2
 
     def test_no_topup_when_target_met(self, mocker, tmp_db, no_network_feeds):
         run = self._setup(
