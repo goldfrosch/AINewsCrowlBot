@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass
 from typing import Final
 
@@ -104,20 +105,44 @@ def _metadata_keywords(candidate: VerifiedArticle, decision: EditorialDecision) 
     return list(dict.fromkeys(keyword for keyword in keywords if keyword))
 
 
-def apply_decisions(candidates: list[VerifiedArticle], decisions: list[EditorialDecision]) -> list[Article]:
-    """Apply validated decisions and produce publishable Korean article briefs."""
+def _reject_reason(decision: EditorialDecision | None, threshold: float) -> str:
+    """게시되지 못한 이유를 사람이 읽는 한 문장으로 분류한다."""
+    if decision is None:
+        return "심사 결과 없음"
+    if decision.verdict != "KEEP":
+        return decision.rejection_reason[:80] or "사유 미제공"
+    if decision.quality_score < threshold:
+        return f"품질 점수 미달({decision.quality_score:.0f}<{threshold:.0f})"
+    if decision.content_type not in _CONTENT_TYPES:
+        return f"분류 부적합({decision.content_type or '없음'})"
+    return "한국어 필드 누락"
+
+
+def apply_decisions(
+    candidates: list[VerifiedArticle],
+    decisions: list[EditorialDecision],
+    reasons: list[str] | None = None,
+) -> list[Article]:
+    """Apply validated decisions and produce publishable Korean article briefs.
+
+    `reasons`를 넘기면 게시되지 못한 후보별 탈락 사유가 순서대로 기록된다.
+    """
     by_url = {decision.url: decision for decision in decisions}
     approved: list[Article] = []
     for candidate in candidates:
         decision = by_url.get(candidate.canonical_url) or by_url.get(candidate.article.url)
-        if decision is None or decision.verdict != "KEEP":
-            continue
         threshold = _QUALITY_THRESHOLD if candidate.trusted_source else _UNKNOWN_SOURCE_THRESHOLD
-        if decision.quality_score < threshold or decision.content_type not in _CONTENT_TYPES:
-            continue
-        if not all(
-            _has_hangul(value) for value in (decision.title_ko, decision.summary_ko, decision.why_it_matters_ko)
+        if (
+            decision is None
+            or decision.verdict != "KEEP"
+            or decision.quality_score < threshold
+            or decision.content_type not in _CONTENT_TYPES
+            or not all(
+                _has_hangul(value) for value in (decision.title_ko, decision.summary_ko, decision.why_it_matters_ko)
+            )
         ):
+            if reasons is not None:
+                reasons.append(_reject_reason(decision, threshold))
             continue
         description = (
             f"{decision.summary_ko[:240]}\n\n"
@@ -214,8 +239,11 @@ def _request_review(client, prompt: str, max_tokens: int, caller: str):
     return response
 
 
-def review_articles(candidates: list[VerifiedArticle]) -> list[Article]:
-    """Run one search-free editorial review call and return approved Korean briefs."""
+def review_articles(candidates: list[VerifiedArticle], report: dict | None = None) -> list[Article]:
+    """Run one search-free editorial review call and return approved Korean briefs.
+
+    `report`를 넘기면 심사 통계(후보 수·통과 수·탈락 사유별 건수)가 채워진다.
+    """
     if not candidates or not ANTHROPIC_API_KEY:
         return []
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -232,4 +260,10 @@ def review_articles(candidates: list[VerifiedArticle]) -> list[Article]:
     if response.stop_reason == "max_tokens":
         print("[EditorialReview] 재시도 후에도 잘려 전체 결과를 폐기합니다.")
         return []
-    return apply_decisions(candidates, parse_review_decisions(_response_text(response)))
+    reasons: list[str] = []
+    approved = apply_decisions(candidates, parse_review_decisions(_response_text(response)), reasons)
+    if report is not None:
+        report["candidates"] = len(candidates)
+        report["kept"] = len(approved)
+        report["reasons"] = dict(Counter(reasons).most_common(5))
+    return approved

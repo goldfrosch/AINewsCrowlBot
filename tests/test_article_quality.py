@@ -95,3 +95,20 @@ def test_near_duplicate_detects_repeated_methodology() -> None:
 )
 def test_verify_articles_skips_malformed_url(url: str) -> None:
     assert verify_articles([_article(url)], max_age_days=7) == []
+
+
+def test_verify_articles_reports_attempt_and_pass_counts(mocker) -> None:
+    """0건 원인 규명: 수집 시도 수와 본문 검증 통과 수를 report로 돌려준다."""
+    import article_quality
+
+    mocker.patch.object(article_quality, "fetch_html", return_value=None)
+    report: dict = {}
+
+    result = verify_articles(
+        [_article("https://example.com/one"), _article("https://example.com/two")],
+        max_age_days=7,
+        report=report,
+    )
+
+    assert result == []
+    assert report == {"attempted": 2, "passed": 0}

@@ -171,14 +171,20 @@ def verify_html(article: Article, html: str, max_age_days: int) -> VerifiedArtic
     )
 
 
-def verify_articles(articles: list[Article], max_age_days: int) -> list[VerifiedArticle]:
-    """Fetch and verify article pages with bounded response sizes and safe redirects."""
+def verify_articles(articles: list[Article], max_age_days: int, report: dict | None = None) -> list[VerifiedArticle]:
+    """Fetch and verify article pages with bounded response sizes and safe redirects.
+
+    `report`를 넘기면 시도 수와 통과 수가 기록된다.
+    """
     verified: list[VerifiedArticle] = []
     with create_http_client() as client:
         for article in articles:
             html = fetch_html(client, article.url)
             if html and (candidate := verify_html(article, html, max_age_days)):
                 verified.append(candidate)
+    if report is not None:
+        report["attempted"] = len(articles)
+        report["passed"] = len(verified)
     return verified
 
 
