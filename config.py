@@ -17,7 +17,7 @@ ALLOWED_USER_IDS: set[int] = {int(uid.strip()) for uid in _raw_ids.split(",") if
 # 설정 시: Claude 웹 리서치로 뉴스 큐레이션 (권장)
 # 미설정 시: 기존 크롤러로 폴백
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-opus-5")
 
 # ── 외부 API 키 (크롤러 폴백용) ───────────────────
 YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
@@ -61,9 +61,15 @@ EXCLUDE_URL_LOOKBACK_DAYS = 45  # 중복 제외 대상 게시 이력 조회 기�
 EXCLUDE_URL_PROMPT_LIMIT = 40  # 프롬프트에 나열할 제외 URL 최대 수
 
 # ── Claude 호출 설정 ──────────────────────────────
-# 서버사이드 web_search 결과 블록이 출력 예산을 잠식하므로
-# max_tokens가 작으면 JSON이 잘려 조용히 0건이 된다. (실측: output 1,300~8,400)
-SEARCH_MAX_TOKENS = 4096
+# max_tokens는 thinking + 응답 텍스트의 합산 하드 캡이다. Opus 5부터 thinking이
+# 기본 활성이라, 서버사이드 web_search 블록과 thinking이 같은 예산을 나눠 쓴다.
+# 예산이 모자라면 JSON이 잘려 조용히 0건이 된다. (실측: 텍스트만 1,300~8,400)
+SEARCH_MAX_TOKENS = 16000
+# 검수는 후보 전체를 한 번에 판정하고 한국어 필드까지 생성하므로 탐색보다 출력이 길다.
+REVIEW_MAX_TOKENS = 16000
+# thinking 분량을 통제하는 레버. 두 호출 모두 구조화 JSON 추출이라 medium이면 충분하다.
+# "xhigh"/"max"는 thinking 비활성화와 함께 쓸 수 없다 (400).
+CLAUDE_EFFORT = "medium"
 WEB_SEARCH_TOOL_TYPE = "web_search_20260209"
 WEB_SEARCH_MAX_USES = 3
 # web_search_20260209는 allowed_callers 기본값이 code_execution이라
