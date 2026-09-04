@@ -25,6 +25,7 @@ from agents.preference_analysis import run_preference_analysis, save_preference_
 from config import (
     ALLOWED_USER_IDS,
     ARTICLES_PER_POST,
+    CLAUDE_MODEL,
     DAILY_POST_HOUR,
     DISCORD_CHANNEL_ID,
     MORE_ARTICLES_MAX,
@@ -147,6 +148,16 @@ def _make_embed(article: dict, is_ai_curated: bool = False) -> discord.Embed:
     return embed
 
 
+def _stages_line(result: dict) -> str:
+    """단계별 통과율 한 줄. 0건일 때 어느 게이트가 막았는지 짐작게 한다."""
+    stages = result.get("stages") or {}
+    return (
+        f"본문검증 {stages.get('verify_passed', 0)}/{stages.get('verify_attempted', 0)} · "
+        f"심사 {stages.get('review_kept', 0)}/{stages.get('review_candidates', 0)} · "
+        f"모델 `{CLAUDE_MODEL}`"
+    )
+
+
 def _summary_message(result: dict, count: int) -> str:
     """게시 성공 시 상태 메시지. 손실 내역을 노출해 원인을 즉시 알 수 있게 한다."""
     lines = []
@@ -160,6 +171,7 @@ def _summary_message(result: dict, count: int) -> str:
         f"품질탈락 {result.get('quality_dropped', 0)} · 신규 {result.get('new_count', 0)} · "
         f"feed 보충 {result.get('feed_topup', 0)}"
     )
+    lines.append(f"🔍 {_stages_line(result)}")
     return "\n".join(lines)
 
 
@@ -174,6 +186,17 @@ def _failure_message(result: dict, count: int) -> str:
             f"📭 수집한 {result['raw_count']}개가 전부 기한초과"
             f"(최근 {result.get('max_age_days', '?')}일 기준)로 제외됐습니다."
         )
+    stages = result.get("stages") or {}
+    if stages.get("verify_attempted") and not stages.get("verify_passed"):
+        return (
+            f"📭 후보 {stages['verify_attempted']}개를 수집했지만 본문 검증을 통과한 기사가 없습니다.\n"
+            "페이지 접속 차단·언어·발행일·본문 길이 기준을 확인하세요."
+        )
+    if stages.get("review_candidates") and not stages.get("review_kept"):
+        reason_counts = stages.get("reason_counts") or {}
+        top = sorted(reason_counts.items(), key=lambda item: item[1], reverse=True)[:3]
+        detail = "\n".join(f"· {reason} ({count}건)" for reason, count in top)
+        return f"📭 본문 검증 통과 {stages.get('verify_passed', 0)}개가 편집 심사에서 모두 탈락했습니다.\n{detail}"
     if result.get("quality_dropped", 0):
         return (
             f"📭 수집한 기사들이 본문·언어·실용성 품질 기준을 통과하지 못했습니다. (탈락 {result['quality_dropped']}개)"

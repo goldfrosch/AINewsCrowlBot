@@ -47,6 +47,13 @@ def main():
     print("\n[Dry Run] 결과 요약:")
     print(f"  - curator 반환: {result['raw_count']}개")
     print(f"  - 품질 기준 탈락: {result.get('quality_dropped', 0)}개")
+    stages = result.get("stages") or {}
+    print(
+        f"  - 본문검증 {stages.get('verify_passed', 0)}/{stages.get('verify_attempted', 0)} · "
+        f"심사통과 {stages.get('review_kept', 0)}/{stages.get('review_candidates', 0)}"
+    )
+    for reason, count in sorted((stages.get("reason_counts") or {}).items(), key=lambda item: item[1], reverse=True):
+        print(f"      · {reason} ({count}건)")
     print(f"  - DB 신규 저장: {result['new_count']}개")
     print(f"  - 랭킹 후 게시 대상: {len(result['articles'])}개")
 
