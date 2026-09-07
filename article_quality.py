@@ -155,19 +155,20 @@ def verify_html(article: Article, html: str, max_age_days: int) -> VerifiedArtic
     verified_dates = [value for value in (page_date, path_date) if value]
     if any(recency.is_stale(value, max_age_days=max_age_days) for value in verified_dates):
         return None
-    trusted = _trusted_source(canonical_url)
-    if not verified_dates and not trusted:
-        return None
+    # 발행일 미상은 폐기하지 않고 빈 문자열로 통과시킨다 — recency 모듈의 정책과 동일하게
+    # 랭킹에서 감점(0.85)만 받는다. 이전 구현은 meta 날짜가 없고 신뢰 도메인(15개)도
+    # 아니면 즉시 버렸는데, 실측 URL 30개 중 10%가 여기서 탈락했고 그중에는 과거에
+    # 정상 게시된 실무자 블로그도 있었다.
     published = page_date or path_date or recency.parse_published_date(article.published_at)
-    if published is None or recency.is_stale(published, max_age_days=max_age_days):
+    if published is not None and recency.is_stale(published, max_age_days=max_age_days):
         return None
     return VerifiedArticle(
         article=article,
         canonical_url=canonical_url,
         language=language,
-        published_at=published.isoformat(),
+        published_at=published.isoformat() if published else "",
         excerpt=text[:5000],
-        trusted_source=trusted,
+        trusted_source=_trusted_source(canonical_url),
     )
 
 

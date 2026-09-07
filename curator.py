@@ -27,13 +27,16 @@ Target reader: software engineer working on agentic systems, multi-agent orchest
 AI-assisted code modification, or LLM infrastructure and evaluation harnesses.
 
 Rules, in priority order:
-1. RECENCY IS A HARD GATE. The user prompt states today's date and a cutoff date. Articles published
-   before the cutoff must not be returned, regardless of quality.
-2. Every article needs a verifiable publication date. If you cannot establish one, drop the article.
-   Never guess a date and never report today's date for an undated page.
+1. RECENCY IS A HARD GATE FOR DATED ARTICLES. The user prompt states today's date and a cutoff date.
+   If you can determine an article was published before the cutoff, do not return it.
+2. You only have web_search — you cannot open pages, so you often cannot confirm a publication date.
+   Report the date when the search result, snippet, or URL gives you one; otherwise set
+   "published_at" to "" and still return the article. Never guess a date and never report today's
+   date for an undated page. Every candidate is fetched and date-checked downstream.
 3. Within the window, prefer tutorials, how-to guides, and case studies with concrete techniques.
-4. No sponsored content, no press releases, no undated evergreen SEO pages.
-5. Output ONLY valid JSON — no preamble, no explanation. If nothing qualifies, output []."""
+4. No sponsored content, no press releases. Deprioritize undated evergreen SEO pages, but do not
+   reject an article solely because its date is unknown.
+5. Output ONLY valid JSON — no preamble, no explanation. A partial list always beats an empty one."""
 
 # system 프롬프트는 매 호출 동일하므로 prompt caching으로 입력 토큰 절감.
 # 30초 후 재시도(RateLimit) 시 캐시 TTL(5분) 내라 캐시 히트 → input 토큰 ~90% 할인.
@@ -208,7 +211,8 @@ def build_fallback_prompt(
         [
             "NOT general AI news — only content with actionable techniques or concrete examples.",
             "Requirements: real articles only, no sponsored content, no pure press releases.",
-            '"published_at" MUST be the real publication date (YYYY-MM-DD). If you cannot verify it, omit the article.',
+            '"published_at" (YYYY-MM-DD): take it from the search result metadata, the snippet, or the URL path. '
+            'If none of those yield a date, return the article with "published_at": "" rather than dropping it.',
             f"Run at most {WEB_SEARCH_MAX_USES} targeted searches, then output JSON.",
             "",
         ]

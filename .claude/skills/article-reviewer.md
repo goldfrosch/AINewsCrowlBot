@@ -21,7 +21,6 @@ Output ONLY valid JSON — no explanation, no preamble.
 | 중국어 본문 | 즉시 REJECT (중국계 출처의 영어·한국어 본문은 허용) |
 | 단순 뉴스 (모델 발표·기업 소식만, 개발자 활용법 없음) | REJECT |
 | 실용성 없음 (코드 예시·구체적 기법·재현 가능한 팁 없음) | 감점 |
-| 중복 이벤트 (동일 주제·기법 아티클 ≥ 2개) | 최선 1개만 KEEP |
 | 저품질 출처 (SEO 어뷰징·AI 생성 단순 요약 블로그) | 감점 |
 | 튜토리얼·how-to·코드 예시·사례 연구 | KEEP 우선 |
 | 선호 소스·선호 키워드 해당 | KEEP 우선 |
@@ -44,12 +43,30 @@ Output ONLY valid JSON — no explanation, no preamble.
 4. KEEP: AI로 게임 프로그래머가 직접 하기 어려운 영역(3D 모델링, UI/UX, 텍스처, 애니메이션, 사운드, 캐릭터 디자인)을 보완하는 실전 사례·워크플로우·도구 리뷰
 5. REJECT: 개발자 활용 팁 없는 순수 뉴스 (모델 발표·기업 자금 조달 등)
 6. REJECT: 스폰서 콘텐츠·일반 AI 과장·얄팍한 listicle
-7. REJECT: 근중복 (같은 기법을 다룬 아티클이 여러 개 → 최선 1개만 유지)
-8. REJECT: 단순 게임 플레이 AI (체스·바둑 AI 등) — 게임 "개발"에 활용하는 사례가 아닌 경우 제외
-9. PREFER: 1차 소스·실무자 블로그·공식 문서 > 어그리게이터 사이트
-10. ENGINE NEUTRAL: Unreal·Unity·Godot을 동등하게 평가하고 특정 엔진을 강제하지 않음
+7. REJECT: 단순 게임 플레이 AI (체스·바둑 AI 등) — 게임 "개발"에 활용하는 사례가 아닌 경우 제외
+8. PREFER: 1차 소스·실무자 블로그·공식 문서 > 어그리게이터 사이트
+9. ENGINE NEUTRAL: Unreal·Unity·Godot을 동등하게 평가하고 특정 엔진을 강제하지 않음
+10. INDEPENDENT: 후보는 **각각 독립적으로** 평가한다. 근중복 제거는 심사 이전 단계
+    (`article_quality.remove_near_duplicates`)에서 이미 끝났으므로, 다른 후보와 주제가
+    비슷하다는 이유로 감점하거나 REJECT하지 않는다
+
+## quality_score 스케일
+
+`quality_score`는 아래 절대 기준으로 매긴다. 자기 임의 스케일을 쓰면 코드의 통과
+임계값과 체계적으로 어긋나 전량 탈락한다 (실측: 모델 KEEP 판정 78점·70점이
+코드 컷 82에 걸려 폐기).
+
+| 구간 | 기준 |
+|------|------|
+| 85–100 | 명령어·코드·설정을 포함한 재현 가능한 전 과정 + 실측 결과나 실제 프로젝트 사례 |
+| 70–84 | 실무자가 바로 따라할 수 있는 구체적 절차·코드·도구 설정. 좋은 블로그 글 대부분이 여기 |
+| 50–69 | 정확하지만 얕음 — 개념 개요·기능 요약·실행 세부가 없는 목록 |
+| 0–49 | 뉴스·마케팅·페이월 스텁·논문·실행 가능한 내용 없음 |
+
+통과 기준: 일반 소스 **70점 이상**, `trusted_source: true`인 소스 **62점 이상**.
+미만이면 `verdict: "REJECT"`와 함께 `rejection_reason`에 사유를 적는다.
 
 ## 출력 형식
 
-선별된 기사 JSON 배열 (모든 원본 필드 보존, `curator_reason` 없거나 약하면 보강):
-[{"url":"...","title":"...","source":"...","description":"...","published_at":"...","curator_reason":"..."}]
+후보 URL 1개당 결정 1개를 JSON 배열로 반환한다 (설명·서문 없이 JSON만):
+[{"url":"...","verdict":"KEEP|REJECT","quality_score":0-100,"title_ko":"...","summary_ko":"...","why_it_matters_ko":"...","content_type":"ai_programming|game_asset_workflow","engines":["Unreal|Unity|Godot|Cross-engine"],"game_client_relevance":0-100,"keywords":["..."],"rejection_reason":"..."}]

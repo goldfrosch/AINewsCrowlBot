@@ -137,8 +137,11 @@ def prompt_lines(max_age_days: int = RECENCY_MAX_AGE_DAYS) -> list[str]:
     preferred = ref - timedelta(days=min(RECENCY_PREFERRED_AGE_DAYS, max_age_days))
     return [
         f"Today is {ref.isoformat()} (Asia/Seoul).",
-        f"HARD REQUIREMENT: only articles published on or after {cutoff.isoformat()} "
-        f"(within the last {max_age_days} days). Anything older is rejected automatically.",
+        f"HARD REQUIREMENT: if you can determine an article's publication date and it is before "
+        f"{cutoff.isoformat()} (not within the last {max_age_days} days), drop it.",
+        "If you CANNOT determine a date, still return the article with an empty published_at. "
+        "Never guess a date, and never drop an article only because its date is missing — "
+        "the pipeline fetches every page and verifies the date itself.",
         f"Strongly prefer articles published on or after {preferred.isoformat()}.",
         f'Include "{ref.year}" and the current month in your search queries to surface recent pages.',
         "",

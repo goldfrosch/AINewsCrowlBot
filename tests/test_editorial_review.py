@@ -76,15 +76,50 @@ def test_apply_decisions_builds_korean_game_asset_brief() -> None:
 
 
 def test_unknown_source_requires_higher_quality_score() -> None:
-    decisions = parse_review_decisions(_response(score=80))
+    decisions = parse_review_decisions(_response(score=65))
 
     assert apply_decisions([_verified(trusted=False)], decisions) == []
 
 
 def test_trusted_source_uses_standard_quality_threshold() -> None:
-    decisions = parse_review_decisions(_response(score=80))
+    decisions = parse_review_decisions(_response(score=65))
 
     assert len(apply_decisions([_verified(trusted=True)], decisions)) == 1
+
+
+def test_unknown_source_accepts_solid_practical_article() -> None:
+    """루브릭 70-84 구간(실무자가 바로 따라할 수 있는 글)은 미신뢰 소스라도 통과해야 한다.
+
+    임계값 82 시절에는 모델이 KEEP으로 판정한 78점·70점 아티클이 전부 폐기돼
+    브리핑이 0건이 됐다.
+    """
+    decisions = parse_review_decisions(_response(score=70))
+
+    assert len(apply_decisions([_verified(trusted=False)], decisions)) == 1
+
+
+def test_string_quality_score_is_parsed_as_number() -> None:
+    """모델이 점수를 문자열로 내면 이전 구현은 0.0으로 떨어뜨려 후보를 전량 탈락시켰다."""
+    payload = json.loads(_response(score=0))
+    payload[0]["quality_score"] = "88"
+
+    decisions = parse_review_decisions(json.dumps(payload, ensure_ascii=False))
+
+    assert decisions[0].quality_score == 88.0
+    assert len(apply_decisions([_verified(trusted=False)], decisions)) == 1
+
+
+def test_review_prompt_declares_scoring_scale_and_thresholds() -> None:
+    """루브릭 없이 0-100만 요구하면 모델의 임의 스케일과 코드 임계값이 어긋난다."""
+    from editorial_review import _QUALITY_THRESHOLD, _UNKNOWN_SOURCE_THRESHOLD, _review_prompt
+
+    prompt = _review_prompt([_verified(trusted=False)])
+
+    assert "SCORING" in prompt
+    assert f">= {_UNKNOWN_SOURCE_THRESHOLD:.0f}" in prompt
+    assert f">= {_QUALITY_THRESHOLD:.0f}" in prompt
+    # 근중복 제거는 remove_near_duplicates가 이미 했으므로 심사에서 또 깎으면 이중 페널티다.
+    assert "INDEPENDENTLY" in prompt
 
 
 def test_korean_editorial_fields_are_required() -> None:
@@ -117,7 +152,7 @@ def test_apply_decisions_collects_rejection_reasons() -> None:
                 {
                     "url": "https://b.example/post",
                     "verdict": "KEEP",
-                    "quality_score": 80,
+                    "quality_score": 65,
                     "title_ko": "한글 제목",
                     "summary_ko": "한글 요약입니다.",
                     "why_it_matters_ko": "한글 이유입니다.",
@@ -149,7 +184,7 @@ def test_apply_decisions_collects_rejection_reasons() -> None:
     approved = apply_decisions([approved_candidate, low_score_candidate, paper_candidate], decisions, reasons)
 
     assert len(approved) == 1
-    assert reasons == ["품질 점수 미달(80<82)", "논문 형식이라 재현 가능한 절차가 없습니다"]
+    assert reasons == ["품질 점수 미달(65<70)", "논문 형식이라 재현 가능한 절차가 없습니다"]
 
 
 def test_reject_reason_covers_each_gate() -> None:

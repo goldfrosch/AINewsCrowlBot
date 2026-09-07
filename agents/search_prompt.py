@@ -110,10 +110,12 @@ def build_search_prompt(
     lines += [
         "",
         "Rules:",
-        "- Recency is a HARD filter, applied before quality. Skip anything outside the window.",
-        '- "published_at" MUST be the real publication date (YYYY-MM-DD). '
-        "If you cannot verify it, omit the article entirely.",
-        "- Do NOT return undated evergreen pages, docs pages, or 'awesome-list' repos.",
+        "- Recency is a HARD filter for articles whose date you CAN determine: outside the window, skip it.",
+        '- "published_at" (YYYY-MM-DD): take it from the search result metadata, the snippet, or the URL '
+        'path. If none of those yield a date, return the article with "published_at": "" rather than '
+        "dropping it. Returning zero articles is a worse outcome than returning undated candidates.",
+        "- Prefer pages that look recent (year/month in the URL, 'N days ago', current-month coverage) "
+        "over undated evergreen SEO pages, docs pages, and 'awesome-list' repos.",
         "- Within the window, prefer tutorials, case studies, and posts with concrete techniques.",
         "- Treat Unreal, Unity, and Godot equally; do not require one engine to appear in the results.",
         "- For game content, focus on workflows ordinary game client programmers can reproduce: code, 3D, "

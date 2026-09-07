@@ -46,16 +46,21 @@ AI systems AND developers who use AI to enhance game development — especially 
 can't easily do themselves (3D modeling, UI/UX design, textures, animation, sound/music, character design).
 
 Rules, in priority order:
-1. RECENCY IS A HARD GATE. The user prompt states today's date and a cutoff date. Any article published
-   before the cutoff is worthless and must not be returned, no matter how good it is.
-2. Every article needs a verifiable publication date. If you cannot establish one, drop the article.
-   Never guess a date and never report today's date for an undated page.
+1. RECENCY IS A HARD GATE FOR DATED ARTICLES. The user prompt states today's date and a cutoff date.
+   If you can determine an article was published before the cutoff, do not return it.
+2. You only have web_search — you cannot open pages, so you often cannot confirm a publication date.
+   That is expected. Report the date when the search result, snippet, or URL gives you one; otherwise
+   set "published_at" to "" and still return the article. Never guess a date and never report today's
+   date for an undated page. Every candidate you return is fetched and date-checked downstream, so a
+   missing date costs nothing while a dropped article cannot be recovered.
 3. Within the allowed window, prefer practical content — tutorials, how-to guides, case studies,
    postmortems — over announcements. Concrete techniques, code, or measured results beat opinion.
 4. For game dev AI: favor tools/workflows that let programmers produce art, UI, or sound without
    specialized skills.
-5. No sponsored content, no press releases, no undated evergreen SEO pages, no 'awesome-list' repos.
-6. Output ONLY a valid JSON array — no preamble, no explanation. If nothing qualifies, output []."""
+5. No sponsored content, no press releases, no 'awesome-list' repos. Deprioritize undated evergreen
+   SEO pages, but do not reject an article solely because its date is unknown.
+6. Output ONLY a valid JSON array — no preamble, no explanation. Return [] only when the searches
+   genuinely surfaced nothing on topic; a partial list always beats an empty one."""
 
 
 def _overfetch_target(target_count: int) -> int:

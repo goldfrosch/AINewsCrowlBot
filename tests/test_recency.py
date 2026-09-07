@@ -119,3 +119,9 @@ class TestPromptLines:
         assert recency.today().isoformat() in lines
         assert (recency.today() - timedelta(days=7)).isoformat() in lines
         assert "HARD REQUIREMENT" in lines
+
+    def test_allows_articles_whose_date_cannot_be_determined(self):
+        """web_search만으로는 발행일을 확정할 수 없다. 검증을 강제하면 모델이 []만 반환한다."""
+        lines = "\n".join(recency.prompt_lines(7))
+        assert "empty published_at" in lines
+        assert "never drop an article only because its date is missing" in lines

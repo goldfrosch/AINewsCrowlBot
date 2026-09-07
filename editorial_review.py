@@ -18,8 +18,12 @@ from config import ANTHROPIC_API_KEY, CLAUDE_EFFORT, CLAUDE_MODEL, REVIEW_MAX_TO
 from crawlers.base import Article
 from text_utils import extract_json_array
 
-_QUALITY_THRESHOLD: Final = 75.0
-_UNKNOWN_SOURCE_THRESHOLD: Final = 82.0
+# 임계값은 심사 프롬프트의 루브릭(_SCORING_RUBRIC)과 한 쌍으로 움직인다.
+# 이전 값(75/82)은 루브릭 없이 정해져 모델의 실제 분포와 어긋나 있었다.
+# 실측(2026-09-07, 후보 10건): min 15 / max 88 / 평균 60이고 모델이 KEEP으로
+# 판정한 실용 아티클이 70~88에 몰려, 82 컷은 anthropic.com 급만 통과시켰다.
+_QUALITY_THRESHOLD: Final = 62.0
+_UNKNOWN_SOURCE_THRESHOLD: Final = 70.0
 _CONTENT_TYPES: Final = {"ai_programming", "game_asset_workflow"}
 _ENGINE_NAMES: Final = {
     "cross-engine": "Cross-engine",
@@ -48,10 +52,20 @@ class EditorialDecision:
 
 
 def _number(value) -> float:
+    """0~100으로 클램프한 점수. 숫자 문자열도 허용한다.
+
+    문자열을 0.0으로 떨어뜨리면 모델이 `"quality_score": "85"`로 응답하는 순간
+    모든 후보가 '품질 점수 미달(0<70)'로 전멸한다.
+    """
     if isinstance(value, bool):
         return 0.0
     if isinstance(value, int | float):
         return max(0.0, min(float(value), 100.0))
+    if isinstance(value, str):
+        try:
+            return max(0.0, min(float(value.strip()), 100.0))
+        except ValueError:
+            return 0.0
     return 0.0
 
 
@@ -165,6 +179,32 @@ def apply_decisions(
     return approved
 
 
+def _scoring_rubric() -> str:
+    """quality_score의 의미를 못 박는 루브릭.
+
+    이 블록이 없으면 모델은 자기 임의 스케일로 점수를 매기고, 코드의 임계값과
+    체계적으로 어긋난다. 실측에서 모델이 KEEP으로 판정한 78점·70점 아티클이
+    코드 컷(82)에 걸려 전부 폐기됐다. 임계값을 문자열로 직접 주입해
+    상수와 프롬프트가 따로 노는 것을 막는다.
+    """
+    return (
+        "SCORING — quality_score is 0-100 on THIS scale, not your own:\n"
+        "- 85-100: reproducible end-to-end workflow with commands/code/settings AND measured results "
+        "or a real project case study.\n"
+        "- 70-84: solid practical guide a working programmer can act on — concrete steps, code, or "
+        "tool configuration — even without measured results. Most good blog posts land here.\n"
+        "- 50-69: accurate but shallow — concept overview, feature summary, or a list with no "
+        "executable detail.\n"
+        "- 0-49: news, marketing, paywalled stub, academic paper, or nothing actionable.\n"
+        f"KEEP requires quality_score >= {_UNKNOWN_SOURCE_THRESHOLD:.0f}, or "
+        f'>= {_QUALITY_THRESHOLD:.0f} when the candidate has "trusted_source": true. '
+        "Below that, use REJECT and explain why in rejection_reason.\n"
+        "Score every candidate INDEPENDENTLY on its own merits. Near-duplicates are removed before "
+        "this step, so never lower a score or REJECT a candidate because another candidate covers a "
+        "similar topic."
+    )
+
+
 def _review_prompt(candidates: list[VerifiedArticle]) -> str:
     payload = [
         {
@@ -193,7 +233,7 @@ def _review_prompt(candidates: list[VerifiedArticle]) -> str:
         "releases, marketing pages, shallow listicles, and content without concrete steps or evidence. Treat "
         "Unreal, Unity, and Godot equally. Produce natural Korean editorial fields for every KEEP decision. "
         "Do not invent URLs or facts. Return one decision per input URL as JSON only.\n\n"
-        f"OUTPUT: {schema}\n\nCANDIDATES:\n{json.dumps(payload, ensure_ascii=False)}"
+        f"{_scoring_rubric()}\n\nOUTPUT: {schema}\n\nCANDIDATES:\n{json.dumps(payload, ensure_ascii=False)}"
     )
 
 

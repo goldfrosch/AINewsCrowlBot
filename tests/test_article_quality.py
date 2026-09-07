@@ -63,6 +63,24 @@ def test_verify_html_rejects_academic_paper_url() -> None:
     assert result is None
 
 
+def test_verify_html_keeps_undated_page_from_unknown_source() -> None:
+    """발행일 미상은 폐기하지 않는다 — recency 정책대로 통과시키고 랭킹에서만 감점한다.
+
+    이전 구현은 meta 날짜가 없고 신뢰 도메인(15개)도 아니면 즉시 버렸다.
+    실측 URL 30개 중 10%가 여기서 탈락했고 그중에는 과거 정상 게시된 블로그도 있었다.
+    """
+    article = _article("https://unknown-blog.example/ai-workflow")
+    article.published_at = ""
+    body = "A practical programming tutorial with implementation details and code examples. " * 30
+    html = f'<html lang="en"><body><article>{body}</article></body></html>'
+
+    result = verify_html(article, html, 7)
+
+    assert result is not None
+    assert result.published_at == ""
+    assert result.trusted_source is False
+
+
 def test_verify_html_rejects_stale_page_date_despite_fresh_claim() -> None:
     article = _article("https://example.com/2025/old-guide")
     body = "A practical programming tutorial with implementation details and code examples. " * 30

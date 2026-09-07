@@ -71,7 +71,9 @@ REVIEW_MAX_TOKENS = 16000
 # "xhigh"/"max"는 thinking 비활성화와 함께 쓸 수 없다 (400).
 CLAUDE_EFFORT = "medium"
 WEB_SEARCH_TOOL_TYPE = "web_search_20260209"
-WEB_SEARCH_MAX_USES = 3
+# 탐색 토픽이 8개인데 3회로는 토픽 대부분이 조회조차 되지 않는다.
+# 실측(2026-09-07): 3회 검색 → 결과 22건 수신 → 채택 0건.
+WEB_SEARCH_MAX_USES = 6
 # web_search_20260209는 allowed_callers 기본값이 code_execution이라
 # programmatic tool calling 미지원 모델에서 400이 발생한다. 명시적으로 direct 지정.
 WEB_SEARCH_ALLOWED_CALLERS = ["direct"]

@@ -37,15 +37,17 @@ description: 웹 검색으로 AI 개발자 아티클 및 AI 게임 개발 활용
 | `source` | 출처 (예: "Simon Willison's Weblog") |
 | `description` | 2–3문장 요약 |
 | `author` | 저자 |
-| `published_at` | 발행일 (YYYY-MM-DD) |
+| `published_at` | 발행일 (YYYY-MM-DD). 검색 결과 메타데이터·스니펫·URL 경로에서 확인되지 않으면 빈 문자열 `""` — 추측 금지, 날짜를 모른다는 이유로 기사를 버리지 말 것 |
 | `curator_reason` | 선택 이유 (개발자에게 구체적으로 어떤 가치가 있는지 1문장) |
 
 ## 검색 전략
 
 - 토픽당 2–4회 타겟 검색 후 JSON 출력 (과도한 검색 금지)
 - 이미 수집한 URL은 `already_collected` 집합으로 중복 방지
-- 오늘 게시된 URL은 `db.get_todays_posted_urls()`로 제외
-- 48시간 이내 발행 기사 우선
+- 최근 게시된 URL은 `db.get_recent_posted_urls()`로 제외
+- 최근 발행 기사 우선. 단 **날짜를 확인하지 못했다고 기사를 버리지 않는다** —
+  `web_search`만으로는 발행일을 확정할 수 없는 경우가 많고, 파이프라인이 페이지를
+  직접 받아 발행일을 재검증한다. 빈 배열을 반환하는 것이 가장 나쁜 결과다
 - Unreal·Unity·Godot을 동등하게 탐색하며 특정 엔진 포함을 강제하지 않음
 - 논문·프리프린트·학술 초록·광고·보도자료·얕은 뉴스·listicle 제외
 - 중국어 본문은 제외하되 중국계 출처의 영어·한국어 본문은 허용
