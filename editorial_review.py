@@ -14,7 +14,7 @@ import anthropic
 import token_tracker
 from agents.agent_spec import SKILL_REVIEWER
 from article_quality import VerifiedArticle
-from config import ANTHROPIC_API_KEY, CLAUDE_EFFORT, CLAUDE_MODEL, REVIEW_MAX_TOKENS
+from config import ANTHROPIC_API_KEY, CLAUDE_EFFORT, REVIEW_MAX_TOKENS, REVIEW_MODEL
 from crawlers.base import Article
 from text_utils import extract_json_array
 
@@ -254,7 +254,7 @@ def _request_review(client, prompt: str, max_tokens: int, caller: str):
     started = time.perf_counter()
     try:
         with client.messages.stream(
-            model=CLAUDE_MODEL,
+            model=REVIEW_MODEL,
             max_tokens=max_tokens,
             output_config={"effort": CLAUDE_EFFORT},
             system=[{"type": "text", "text": SKILL_REVIEWER, "cache_control": {"type": "ephemeral"}}],
@@ -269,11 +269,10 @@ def _request_review(client, prompt: str, max_tokens: int, caller: str):
     ) as error:
         print(f"[EditorialReview] 검수 실패로 후보를 게시하지 않습니다: {error}")
         return None
-    usage = response.usage
-    token_tracker.log_token_usage(
-        usage.input_tokens,
-        usage.output_tokens,
+    token_tracker.log_api_usage(
+        response.usage,
         caller=caller,
+        model=REVIEW_MODEL,
         elapsed_seconds=round(time.perf_counter() - started, 2),
     )
     return response

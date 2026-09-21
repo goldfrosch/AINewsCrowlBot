@@ -20,8 +20,8 @@ import anthropic
 import token_tracker
 from config import (
     CLAUDE_EFFORT,
-    CLAUDE_MODEL,
     SEARCH_MAX_TOKENS,
+    SEARCH_MODEL,
     WEB_SEARCH_ALLOWED_CALLERS,
     WEB_SEARCH_MAX_USES,
     WEB_SEARCH_TOOL_TYPE,
@@ -75,7 +75,7 @@ def _invoke(client, *, prompt: str, system_blocks, caller: str, max_tokens: int,
     for attempt in range(_PAUSE_TURN_MAX_CONTINUATIONS + 1):
         started = time.perf_counter()
         with client.messages.stream(
-            model=CLAUDE_MODEL,
+            model=SEARCH_MODEL,
             max_tokens=max_tokens,
             output_config={"effort": CLAUDE_EFFORT},
             tools=[web_search_tool(max_uses)],
@@ -86,10 +86,10 @@ def _invoke(client, *, prompt: str, system_blocks, caller: str, max_tokens: int,
 
         usage = getattr(response, "usage", None)
         if usage is not None:
-            token_tracker.log_token_usage(
-                getattr(usage, "input_tokens", 0) or 0,
-                getattr(usage, "output_tokens", 0) or 0,
+            token_tracker.log_api_usage(
+                usage,
                 caller=caller if attempt == 0 else f"{caller}_pause{attempt}",
+                model=SEARCH_MODEL,
                 elapsed_seconds=round(time.perf_counter() - started, 2),
             )
 
