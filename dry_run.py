@@ -19,8 +19,34 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import database as db
-from config import ARTICLES_PER_POST
+import token_tracker
+from config import ARTICLES_PER_POST, REVIEW_MODEL, SEARCH_MODEL
 from pipeline import run_curation_pipeline
+
+
+def _print_cost_report(usage_mark: int) -> None:
+    """이번 실행에서 실제로 나간 비용을 호출자별로 보여준다.
+
+    게이트 통과율만 봐서는 "싸게 많이 거르는지 비싸게 조금 거르는지"를 알 수 없다.
+    수율과 비용을 한 화면에서 같이 봐야 어느 손잡이를 돌릴지 정할 수 있다.
+    """
+    usage = token_tracker.get_usage_since(usage_mark)
+    if not usage["call_count"]:
+        print("\n[Dry Run] API 호출 없음 (비용 $0)")
+        return
+
+    print(f"\n[Dry Run] 이번 실행 비용: ${usage['total_cost']:.4f} · {usage['total_seconds']:.0f}초")
+    print(
+        f"  토큰 입력 {usage['total_input']:,} / 출력 {usage['total_output']:,} / "
+        f"캐시 기록 {usage['total_cache_write']:,} / 캐시 히트 {usage['total_cache_read']:,}"
+    )
+    print(f"  웹 검색 {usage['total_searches']}회 (${usage['total_searches'] * 0.01:.2f})")
+    for caller in usage["callers"]:
+        print(
+            f"      · {caller['caller']:34} ${caller['cost']:7.4f}  "
+            f"{caller['tokens']:>8,} tok  검색 {caller['searches']}회  "
+            f"{caller['seconds']:5.1f}초  [{caller['model'] or '미기록'}]"
+        )
 
 
 def main():
@@ -38,11 +64,9 @@ def main():
     db.init_db()
 
     print(f"[Dry Run] 큐레이션 파이프라인 시작 (count={args.count})...")
+    print(f"[Dry Run] 모델 — 탐색 {SEARCH_MODEL} / 심사 {REVIEW_MODEL}")
+    usage_mark = token_tracker.latest_row_id()
     result = run_curation_pipeline(count=args.count)
-
-    if result["error"]:
-        print(f"\n[Dry Run] 파이프라인 에러: {result['error']}")
-        sys.exit(1)
 
     print("\n[Dry Run] 결과 요약:")
     print(f"  - curator 반환: {result['raw_count']}개")
@@ -56,6 +80,14 @@ def main():
         print(f"      · {reason} ({count}건)")
     print(f"  - DB 신규 저장: {result['new_count']}개")
     print(f"  - 랭킹 후 게시 대상: {len(result['articles'])}개")
+
+    # 진단 리포트를 에러보다 먼저 낸다. 이전 구현은 여기서 곧장 exit해서
+    # 정작 원인을 알려줄 단계별 통과율과 비용을 한 줄도 못 보고 끝났다.
+    _print_cost_report(usage_mark)
+
+    if result["error"]:
+        print(f"\n[Dry Run] 파이프라인 에러: {result['error']}")
+        sys.exit(1)
 
     if not result["articles"]:
         print("\n[Dry Run] 게시할 기사가 없습니다.")
