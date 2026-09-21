@@ -25,11 +25,12 @@ from agents.preference_analysis import run_preference_analysis, save_preference_
 from config import (
     ALLOWED_USER_IDS,
     ARTICLES_PER_POST,
-    CLAUDE_MODEL,
     DAILY_POST_HOUR,
     DISCORD_CHANNEL_ID,
     MORE_ARTICLES_MAX,
     PREFERENCE_ANALYSIS_HOUR,
+    REVIEW_MODEL,
+    SEARCH_MODEL,
     TIMEZONE,
 )
 from pipeline import run_curation_pipeline
@@ -148,13 +149,19 @@ def _make_embed(article: dict, is_ai_curated: bool = False) -> discord.Embed:
     return embed
 
 
+def _usd(value: float) -> str:
+    """달러 표기. 하루 비용이 센트 단위라 소수 4자리까지 보여준다."""
+    return f"${value:,.4f}" if value < 1 else f"${value:,.2f}"
+
+
 def _stages_line(result: dict) -> str:
     """단계별 통과율 한 줄. 0건일 때 어느 게이트가 막았는지 짐작게 한다."""
     stages = result.get("stages") or {}
+    models = SEARCH_MODEL if SEARCH_MODEL == REVIEW_MODEL else f"{SEARCH_MODEL}+{REVIEW_MODEL}"
     return (
         f"본문검증 {stages.get('verify_passed', 0)}/{stages.get('verify_attempted', 0)} · "
         f"심사 {stages.get('review_kept', 0)}/{stages.get('review_candidates', 0)} · "
-        f"모델 `{CLAUDE_MODEL}`"
+        f"모델 `{models}`"
     )
 
 
@@ -447,8 +454,9 @@ async def cmd_tokens(ctx: commands.Context):
             f"API 호출: **{today['call_count']}**회\n"
             f"입력 토큰: **{today['total_input']:,}**\n"
             f"출력 토큰: **{today['total_output']:,}**\n"
-            f"합계: **{today['total_tokens']:,}**\n"
-            f"호출당 평균: **{today['avg_per_call']:,}**"
+            f"캐시 기록/히트: **{today['total_cache_write']:,}** / **{today['total_cache_read']:,}**\n"
+            f"웹 검색: **{today['total_searches']}**회\n"
+            f"비용: **{_usd(today['total_cost'])}**"
         ),
         inline=True,
     )
@@ -466,8 +474,8 @@ async def cmd_tokens(ctx: commands.Context):
     embed.add_field(
         name="⏱️ 5시간 윈도우 비교",
         value=(
-            f"현재 윈도우: **{window['current_tokens']:,}** ({window['current_calls']}회)\n"
-            f"이전 윈도우: **{window['prev_tokens']:,}** ({window['prev_calls']}회)\n"
+            f"현재 윈도우: **{window['current_tokens']:,}** ({window['current_calls']}회, {_usd(window['current_cost'])})\n"
+            f"이전 윈도우: **{window['prev_tokens']:,}** ({window['prev_calls']}회, {_usd(window['prev_cost'])})\n"
             f"증감: **{trend}**"
         ),
         inline=True,
@@ -478,24 +486,29 @@ async def cmd_tokens(ctx: commands.Context):
         name="📊 전체 평균",
         value=(
             f"측정 기간: **{avg['total_days']}**일\n"
-            f"누적 합계: **{avg['grand_total']:,}**\n"
-            f"일 평균: **{avg['avg_per_day']:,}**\n"
+            f"누적 합계: **{avg['grand_total']:,}** ({_usd(avg['grand_cost'])})\n"
+            f"일 평균: **{avg['avg_per_day']:,}** ({_usd(avg['avg_cost_per_day'])}/일)\n"
             f"호출당 평균: **{avg['avg_per_call']:,}**"
         ),
         inline=False,
     )
 
-    # 호출자별 오늘 내역
+    # 호출자별 오늘 내역 — 비용 내림차순이라 어디에 돈이 나가는지 바로 보인다
     if today["callers"]:
-        lines = [f"• `{c['caller']}`: {c['tokens']:,} tok ({c['calls']}회)" for c in today["callers"][:8]]
+        lines = [
+            f"• `{c['caller']}`: {_usd(c['cost'])} · {c['tokens']:,} tok ({c['calls']}회)" for c in today["callers"][:8]
+        ]
         embed.add_field(name="🔍 오늘 호출 내역", value="\n".join(lines), inline=False)
 
     # 최근 7일 일별 사용량
     if avg["recent_daily"]:
-        lines = [f"• {d['day']}: **{d['tokens']:,}** ({d['calls']}회)" for d in avg["recent_daily"][:7]]
+        lines = [
+            f"• {d['day']}: **{d['tokens']:,}** ({d['calls']}회, {_usd(d['cost'])})" for d in avg["recent_daily"][:7]
+        ]
         embed.add_field(name="📈 최근 7일", value="\n".join(lines), inline=False)
 
-    embed.set_footer(text="5시간 윈도우 = Anthropic 요금제 롤링 한도 기준")
+    models = SEARCH_MODEL if SEARCH_MODEL == REVIEW_MODEL else f"탐색 {SEARCH_MODEL} / 심사 {REVIEW_MODEL}"
+    embed.set_footer(text=f"모델: {models} · 비용은 공개 단가 기준 추정치")
     await ctx.send(embed=embed)
 
 

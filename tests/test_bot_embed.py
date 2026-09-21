@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from bot import _failure_message, _make_embed, _stages_line, _summary_message
-from config import CLAUDE_MODEL
+from config import REVIEW_MODEL, SEARCH_MODEL
 from tests.conftest import days_ago
 
 
@@ -115,7 +115,9 @@ def test_summary_message_includes_stage_pass_rates_and_model() -> None:
 
     assert "본문검증 5/8" in message
     assert "심사 2/5" in message
-    assert CLAUDE_MODEL in message
+    # 탐색·심사 모델이 갈릴 수 있으므로 실제로 호출되는 두 모델을 노출해야 한다.
+    assert SEARCH_MODEL in message
+    assert REVIEW_MODEL in message
 
 
 def test_stages_line_tolerates_missing_stages() -> None:
