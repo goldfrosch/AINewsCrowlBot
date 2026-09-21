@@ -19,6 +19,16 @@ ALLOWED_USER_IDS: set[int] = {int(uid.strip()) for uid in _raw_ids.split(",") if
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-opus-5")
 
+# 단계별 모델 분리.
+# 탐색은 "web_search를 호출하고 결과를 JSON 배열로 포맷"하는 작업이고, 심사는
+# 고정 루브릭에 따른 채점이다. 둘 다 Opus급 추론이 필요한 일이 아니다.
+# 단가(2026-09 기준): Opus 5 $5/$25 per 1M, Sonnet 4.6 $3/$15 per 1M → 약 40% 절감.
+# CLAUDE_MODEL을 환경변수로 명시하면 두 단계 모두 그 값을 따른다(하위호환).
+_STAGE_MODEL_DEFAULT = "claude-sonnet-4-6"
+_CLAUDE_MODEL_OVERRIDE = os.getenv("CLAUDE_MODEL", "")
+SEARCH_MODEL: str = os.getenv("SEARCH_MODEL", "") or _CLAUDE_MODEL_OVERRIDE or _STAGE_MODEL_DEFAULT
+REVIEW_MODEL: str = os.getenv("REVIEW_MODEL", "") or _CLAUDE_MODEL_OVERRIDE or _STAGE_MODEL_DEFAULT
+
 # ── 외부 API 키 (크롤러 폴백용) ───────────────────
 YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
 REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
