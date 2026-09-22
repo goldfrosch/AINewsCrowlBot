@@ -1,7 +1,7 @@
 # 배포 가이드
 
-GitHub Actions를 이용한 수동 배포 파이프라인 문서.
-모든 배포는 **workflow_dispatch**로만 실행되며, 자동 트리거는 없다.
+GitHub Actions를 이용한 배포 파이프라인 문서.
+배포는 **`deploy-*` 태그를 푸시**할 때만 실행된다. `main` 브랜치에 푸시해도 배포는 일어나지 않는다.
 
 ---
 
@@ -24,7 +24,7 @@ GitHub Actions를 이용한 수동 배포 파이프라인 문서.
 ## 1. 아키텍처 개요
 
 ```
-GitHub Actions (workflow_dispatch)
+GitHub Actions (deploy-* 태그 푸시)
   → CI Job: ubuntu-latest, Python 3.11
       → ruff check (린트)
       → pytest (테스트)
@@ -40,7 +40,7 @@ GitHub Actions (workflow_dispatch)
 | 항목 | 값 |
 |------|-----|
 | 워크플로우 이름 | `Deploy` |
-| 트리거 방식 | `workflow_dispatch` (수동만) |
+| 트리거 방식 | `deploy-*` 태그 푸시 (`.github/workflows/deploy.yml`) |
 | 서버 프로젝트 경로 | `~/ai-news-crowl-bot` (`$HOME/ai-news-crowl-bot`, Git repo 불필요) |
 | 컨테이너 이름 | `ainewsbot` |
 | 서비스 이름 | `bot` |
@@ -147,16 +147,22 @@ sudo docker compose -p ai-news-crowl-bot up -d
 
 ---
 
-## 5. 수동 배포 실행
+## 5. 배포 실행
 
-GitHub 웹 UI에서 직접 실행한다.
+배포하려는 커밋에 `deploy-` 로 시작하는 태그를 붙여 푸시한다.
 
-1. 레포지토리 → **Actions** 탭
-2. 좌측에서 **Deploy** 워크플로우 선택
-3. **Run workflow** 버튼 클릭
-4. 브랜치 `main` 확인 후 **Run workflow** 확정
+```bash
+git tag deploy-$(date +%Y%m%d-%H%M)   # 예: deploy-20260923-1830
+git push origin deploy-20260923-1830
+```
 
-배포가 시작되면 Actions 탭에서 실시간 로그를 확인할 수 있다.
+태그가 올라가면 Actions 탭에서 **Deploy** 워크플로우가 자동으로 시작되고 실시간 로그를 볼 수 있다.
+
+`concurrency: deploy-production` 설정으로 배포는 한 번에 하나만 실행되며, 진행 중인 배포는
+취소되지 않는다(`cancel-in-progress: false`). 따라서 태그를 연달아 푸시하면 순차적으로 처리된다.
+
+> 배포를 되돌리려면 이전 릴리스 커밋에 새 `deploy-*` 태그를 붙여 다시 푸시한다.
+> 워크플로우는 자동 롤백을 하지 않는다.
 
 ---
 
