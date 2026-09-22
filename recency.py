@@ -134,7 +134,10 @@ def prompt_lines(max_age_days: int = RECENCY_MAX_AGE_DAYS) -> list[str]:
     """
     ref = today()
     cutoff = ref - timedelta(days=max_age_days)
-    preferred = ref - timedelta(days=min(RECENCY_PREFERRED_AGE_DAYS, max_age_days))
+    # 선호 구간은 창 길이에 비례해야 한다. 120일 창에 "3일 이내 우선"을 붙이면
+    # 모델이 에버그린 학습자료를 스스로 전부 버린다(실측: 후보 13개 중 7개 자체 폐기).
+    preferred_days = min(max(RECENCY_PREFERRED_AGE_DAYS, max_age_days // 4), max_age_days)
+    preferred = ref - timedelta(days=preferred_days)
     return [
         f"Today is {ref.isoformat()} (Asia/Seoul).",
         f"HARD REQUIREMENT: if you can determine an article's publication date and it is before "
@@ -142,7 +145,8 @@ def prompt_lines(max_age_days: int = RECENCY_MAX_AGE_DAYS) -> list[str]:
         "If you CANNOT determine a date, still return the article with an empty published_at. "
         "Never guess a date, and never drop an article only because its date is missing — "
         "the pipeline fetches every page and verifies the date itself.",
-        f"Strongly prefer articles published on or after {preferred.isoformat()}.",
+        f"Within that window prefer articles published on or after {preferred.isoformat()}, but do NOT "
+        "discard an otherwise excellent result that is merely older than that preference.",
         f'Include "{ref.year}" and the current month in your search queries to surface recent pages.',
         "",
     ]

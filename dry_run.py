@@ -58,6 +58,11 @@ def main():
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="상세 출력")
     parser.add_argument("--db", type=str, default="data/bot.db", help="DB 경로")
+    parser.add_argument(
+        "--mark-posted",
+        action="store_true",
+        help="선정된 기사를 게시 완료로 표시 (연속 실행 시뮬레이션용)",
+    )
     args = parser.parse_args()
 
     db.set_db_path(args.db)
@@ -76,8 +81,15 @@ def main():
         f"  - 본문검증 {stages.get('verify_passed', 0)}/{stages.get('verify_attempted', 0)} · "
         f"심사통과 {stages.get('review_kept', 0)}/{stages.get('review_candidates', 0)}"
     )
+    for reason, count in sorted((stages.get("verify_reasons") or {}).items(), key=lambda item: item[1], reverse=True):
+        print(f"      [본문검증 탈락] {reason} ({count}건)")
     for reason, count in sorted((stages.get("reason_counts") or {}).items(), key=lambda item: item[1], reverse=True):
-        print(f"      · {reason} ({count}건)")
+        print(f"      [심사 탈락] {reason[:70]} ({count}건)")
+    for entry in stages.get("passes") or []:
+        print(
+            f"      [패스 {entry['level'] + 1}] 창 {entry['max_age_days']}일 · "
+            f"수집 {entry['raw']} → 심사통과 {entry['reviewed']} → 신규 {entry['new']}"
+        )
     print(f"  - DB 신규 저장: {result['new_count']}개")
     print(f"  - 랭킹 후 게시 대상: {len(result['articles'])}개")
 
@@ -101,6 +113,11 @@ def main():
         elif args.verbose:
             print("  원인: pending 기사가 없거나 랭킹에서 모두 제외되었습니다.")
         sys.exit(0)
+
+    if args.mark_posted:
+        for article in result["articles"]:
+            db.mark_as_posted(article["id"], f"dryrun-{article['id']}", "dryrun")
+        print(f"\n[Dry Run] {len(result['articles'])}개를 게시 완료로 표시했습니다.")
 
     for i, article in enumerate(result["articles"], 1):
         print(f"\n{i}. {article['title']}")

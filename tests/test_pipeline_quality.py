@@ -107,9 +107,11 @@ def test_unreviewed_pending_article_is_not_selected(mocker, tmp_db) -> None:
 def test_stale_pending_rows_do_not_hide_fresh_reviewed_article(mocker, tmp_db) -> None:
     import database as db
 
+    # 완화 루프가 창을 최대 90일까지 넓히므로, "되살아날 수 없는" 기한으로 둬야
+    # 이 테스트가 원래 막으려던 회귀(LIMIT이 신선한 기사를 가리는 문제)만 검증한다.
     for index in range(40):
         stale = _approved(_raw(f"https://example.com/stale-{index}", f"Stale {index}"))
-        stale.published_at = days_ago(30)
+        stale.published_at = days_ago(200)
         db.upsert_article(stale.to_dict())
     fresh = _approved(_raw("https://example.com/fresh-reviewed", "Fresh reviewed"))
     db.upsert_article(fresh.to_dict())

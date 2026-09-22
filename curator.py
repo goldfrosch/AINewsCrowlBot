@@ -78,6 +78,7 @@ def _to_articles(data: list[dict]) -> list[Article]:
                 published_at=str(item.get("published_at") or ""),
                 platform_score=100.0,
                 keywords=keywords,
+                pillar=str(item.get("pillar") or ""),
             )
         )
     return articles
@@ -154,11 +155,12 @@ def build_fallback_prompt(
     exclude_urls: list[str],
     preferences: dict | None = None,
     intent: dict | None = None,
+    max_age_days: int | None = None,
 ) -> str:
     """폴백 리서치용 user prompt를 구성합니다."""
 
     pref_hints = _extract_preference_hints(preferences)
-    max_age_days = recency.max_age_from_intent(intent)
+    max_age_days = max_age_days or recency.max_age_from_intent(intent)
 
     lines = recency.prompt_lines(max_age_days)
     lines += [
@@ -242,6 +244,7 @@ def _fallback_research(
     exclude_urls: list[str],
     preferences: dict,
     intent: dict | None = None,
+    max_age_days: int | None = None,
 ) -> list[Article]:
     """에이전트 실패 시 웹 검색으로 기사를 수집합니다.
 
@@ -249,8 +252,8 @@ def _fallback_research(
     (기존에는 이 함수와 에이전트가 같은 로직을 복제하고 있었고,
      max_tokens 절단 검사가 양쪽 모두 빠져 있었다.)
     """
-    prompt = build_fallback_prompt(count, exclude_urls, preferences, intent)
-    max_age_days = recency.max_age_from_intent(intent)
+    effective_age = max_age_days or recency.max_age_from_intent(intent)
+    prompt = build_fallback_prompt(count, exclude_urls, preferences, intent, effective_age)
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     outcome = claude_search.search_articles(
@@ -260,14 +263,18 @@ def _fallback_research(
         caller="curator_fallback",
     )
 
+    if outcome.fatal:
+        print(f"[Curator] 폴백도 복구 불가 오류: {outcome.error}")
+        raise claude_search.FatalSearchError(outcome.error)
+
     if not outcome.articles:
         print(f"[Curator] 폴백 결과 없음 (stop_reason={outcome.stop_reason}, error={outcome.error})")
         return []
 
-    fresh = [item for item in outcome.articles if not recency.is_stale(item.get("published_at"), max_age_days)]
+    fresh = [item for item in outcome.articles if not recency.is_stale(item.get("published_at"), effective_age)]
     dropped = len(outcome.articles) - len(fresh)
     if dropped:
-        print(f"[Curator] 폴백 기한초과 {dropped}개 제외 (최근 {max_age_days}일 기준)")
+        print(f"[Curator] 폴백 기한초과 {dropped}개 제외 (최근 {effective_age}일 기준)")
 
     print(f"[Curator] 폴백 완료: {len(fresh)}개 수집")
     return _to_articles(fresh[:count])
@@ -281,6 +288,7 @@ def research(
     exclude_urls: list[str] | None = None,
     preferences: dict | None = None,
     intent: dict | None = None,
+    max_age_days: int | None = None,
 ) -> list[Article]:
     """
     뉴스 큐레이션 에이전트로 개발자용 AI 아티클을 수집합니다.
@@ -301,12 +309,21 @@ def research(
         raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
 
     try:
-        raw = _agent_run(target_count=count, external_preferences=preferences or {}, intent=intent)
+        raw = _agent_run(
+            target_count=count,
+            external_preferences=preferences or {},
+            intent=intent,
+            max_age_days=max_age_days,
+        )
         if raw:
             articles = _to_articles(raw)
             print(f"[Curator] 에이전트 완료: {len(articles)}개 선정")
             return articles
         print("[Curator] 에이전트 결과 없음 — 폴백 실행")
+    except claude_search.FatalSearchError:
+        # 폴백도 같은 키로 같은 API를 부른다. 한 번 더 실패시켜 봐야 로그만 늘어난다.
+        print("[Curator] 복구 불가 API 오류 — 폴백을 건너뜁니다.")
+        raise
     except Exception as e:
         import traceback
 
@@ -316,4 +333,4 @@ def research(
     if not ANTHROPIC_API_KEY and not _is_mocked(anthropic.Anthropic):
         raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")
 
-    return _fallback_research(count, exclude_urls or [], preferences or {}, intent=intent)
+    return _fallback_research(count, exclude_urls or [], preferences or {}, intent=intent, max_age_days=max_age_days)

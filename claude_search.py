@@ -32,6 +32,27 @@ _PAUSE_TURN_MAX_CONTINUATIONS = 2
 _RATE_LIMIT_WAIT_SECONDS = 30
 
 
+# 재시도해도 결과가 달라지지 않는 오류. 크레딧 소진·키 무효·권한 없음이 여기 해당한다.
+# 실측(2026-09-23): 크레딧이 떨어지자 파이프라인이 완화 패스 3회 × 라운드 2회 × 필라 3개
+# = 18회를 같은 실패로 낭비하고 "게시 대상 0개"만 남겼다. 원인은 로그 깊숙이 묻혔다.
+_FATAL_MARKERS = (
+    "credit balance is too low",
+    "authentication_error",
+    "permission_error",
+    "invalid x-api-key",
+)
+
+
+class FatalSearchError(RuntimeError):
+    """재시도·폴백이 무의미한 API 오류 (크레딧 소진, 인증 실패 등)."""
+
+
+def is_fatal_error(message: str) -> bool:
+    """재시도가 무의미한 계정·인증 오류인지 판정한다."""
+    lowered = (message or "").lower()
+    return any(marker in lowered for marker in _FATAL_MARKERS)
+
+
 @dataclass
 class SearchOutcome:
     """웹 검색 1회분 결과와 진단 정보."""
@@ -40,6 +61,11 @@ class SearchOutcome:
     stop_reason: str | None = None
     truncated: bool = False
     error: str | None = None
+
+    @property
+    def fatal(self) -> bool:
+        """재시도·폴백이 무의미한 오류인지."""
+        return self.error is not None and is_fatal_error(self.error)
 
 
 def web_search_tool(max_uses: int = WEB_SEARCH_MAX_USES) -> dict:
@@ -122,6 +148,9 @@ def search_articles(
             max_tokens=max_tokens,
             max_uses=max_uses,
         )
+    except anthropic.AuthenticationError as e:
+        print(f"[ClaudeSearch] {caller}: 인증 실패 — 재시도하지 않습니다: {e}")
+        return SearchOutcome(error=f"authentication_error: {e}")
     except anthropic.RateLimitError:
         print(f"[ClaudeSearch] {caller}: RateLimit — {_RATE_LIMIT_WAIT_SECONDS}초 대기 후 재시도")
         time.sleep(_RATE_LIMIT_WAIT_SECONDS)
@@ -138,7 +167,10 @@ def search_articles(
             print(f"[ClaudeSearch] {caller}: 재시도 실패 ({e})")
             return SearchOutcome(error=str(e))
     except anthropic.APIStatusError as e:
-        print(f"[ClaudeSearch] {caller}: API 오류 ({e.status_code}) {e}")
+        # 크레딧 소진은 스트리밍 경로에서 status 200에 에러 바디로 오기도 한다.
+        # 상태 코드만 보면 일시 오류로 오인해 18회를 낭비한다.
+        label = "복구 불가" if is_fatal_error(str(e)) else "API 오류"
+        print(f"[ClaudeSearch] {caller}: {label} ({e.status_code}) {e}")
         return SearchOutcome(error=f"{e.status_code}: {e}")
     except Exception as e:
         print(f"[ClaudeSearch] {caller}: 예상치 못한 오류 ({e})")

@@ -22,7 +22,7 @@ def _strip_frontmatter(text: str) -> str:
 
 
 def _load_agent_spec() -> dict:
-    """news-curation-agent.md 프론트매터에서 토픽 설정을 로드한다."""
+    """news-curation-agent.md 프론트매터에서 토픽·필라 설정을 로드한다."""
     text = _AGENT_DOC_PATH.read_text(encoding="utf-8")
     match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
     if not match:
@@ -31,6 +31,7 @@ def _load_agent_spec() -> dict:
     return {
         "topics": frontmatter.get("topics", {}),
         "default_topics": frontmatter.get("default_topics", []),
+        "pillars": frontmatter.get("pillars", {}),
     }
 
 
@@ -46,6 +47,7 @@ _SPEC = _load_agent_spec()
 
 TOPIC_DESC: dict[str, str] = _SPEC["topics"]
 DEFAULT_TOPICS: list[str] = _SPEC["default_topics"]
+PILLARS: dict[str, dict] = _SPEC["pillars"]
 SKILL_FINDER: str = load_skill("article-finder")
 SKILL_REVIEWER: str = load_skill("article-reviewer")
 
@@ -53,6 +55,41 @@ SKILL_REVIEWER: str = load_skill("article-reviewer")
 def get_topic_keys() -> set[str]:
     """큐레이션 에이전트가 지원하는 토픽 키 집합."""
     return set(TOPIC_DESC.keys())
+
+
+def pillar_keys() -> list[str]:
+    """정의된 필라 키를 문서 순서대로 반환한다."""
+    return list(PILLARS.keys())
+
+
+def pillar_topics(pillar: str) -> list[str]:
+    """필라에 속한 토픽 중 실제로 정의된 것만 반환한다."""
+    spec = PILLARS.get(pillar) or {}
+    return [topic for topic in (spec.get("topics") or []) if topic in TOPIC_DESC]
+
+
+def pillar_of(topic: str) -> str | None:
+    """토픽이 속한 필라 키. 어디에도 없으면 None."""
+    for key, spec in PILLARS.items():
+        if topic in (spec.get("topics") or []):
+            return key
+    return None
+
+
+def pillar_max_age_days(pillar: str, default: int) -> int:
+    """필라별 신선도 컷오프. 값이 없거나 이상하면 기본값을 쓴다."""
+    value = (PILLARS.get(pillar) or {}).get("max_age_days")
+    return value if isinstance(value, int) and value > 0 else default
+
+
+def pillar_weight(pillar: str) -> int:
+    """필라별 목표 수량 배분 가중치."""
+    value = (PILLARS.get(pillar) or {}).get("weight")
+    return value if isinstance(value, int) and value > 0 else 1
+
+
+def pillar_label(pillar: str) -> str:
+    return str((PILLARS.get(pillar) or {}).get("label") or pillar)
 
 
 def topics_for_round(topics: list[str], round_index: int) -> list[str]:

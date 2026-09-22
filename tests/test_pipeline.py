@@ -46,7 +46,7 @@ def pass_quality_gate(mocker):
             for article in articles
         ]
 
-    def review(candidates, report=None):
+    def review(candidates, report=None, relax_level=0):
         if report is not None:
             report["candidates"] = len(candidates)
             report["kept"] = len(candidates)
@@ -82,13 +82,22 @@ def _article(url: str, title: str, *, age_days: int = 1, score: float = 100.0, k
     )
 
 
+def _patch_research(mocker, articles):
+    """첫 완화 패스만 결과를 내고 이후 패스는 빈손인 curator를 흉내 낸다.
+
+    파이프라인은 목표를 채울 때까지 패스를 반복하므로, 같은 리스트를 매번
+    돌려주는 목은 "검색이 계속 새 기사를 찾아낸다"는 비현실적 상황이 된다.
+    """
+    return mocker.patch("pipeline.curator.research", side_effect=[list(articles), [], []])
+
+
 class TestRunCurationPipeline:
     def test_full_pipeline_mocked(self, mocker, tmp_db):
         mock_articles = [
             _article("https://example.com/pipeline-1", "Pipeline Test 1", age_days=1, keywords=["llm"]),
             _article("https://example.com/pipeline-2", "Pipeline Test 2", age_days=2, keywords=["rag"]),
         ]
-        mocker.patch("pipeline.curator.research", return_value=mock_articles)
+        _patch_research(mocker, mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
         mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
@@ -103,7 +112,7 @@ class TestRunCurationPipeline:
         assert all("final_score" in a for a in result["articles"])
 
     def test_empty_curator_result(self, mocker, tmp_db):
-        mocker.patch("pipeline.curator.research", return_value=[])
+        _patch_research(mocker, [])
         mocker.patch("pipeline.load_preference_profile", return_value=None)
         mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
@@ -140,7 +149,7 @@ class TestRunCurationPipeline:
             _article(sample_articles[0]["url"], sample_articles[0]["title"]),  # already in DB
             _article("https://example.com/new-one", "New Article"),
         ]
-        mocker.patch("pipeline.curator.research", return_value=mock_articles)
+        _patch_research(mocker, mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
         mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
@@ -157,7 +166,7 @@ class TestRunCurationPipeline:
             _article(f"https://example.com/rank-{i}", f"Article {i}", age_days=i, score=float(20 * (i + 1)))
             for i in range(5)
         ]
-        mocker.patch("pipeline.curator.research", return_value=mock_articles)
+        _patch_research(mocker, mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
         mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
@@ -165,14 +174,14 @@ class TestRunCurationPipeline:
 
         result = run_curation_pipeline(count=3)
 
-        assert len(result["articles"]) == 2
+        assert len(result["articles"]) == 3
         scores = [a["final_score"] for a in result["articles"]]
         assert scores == sorted(scores, reverse=True)
 
     def test_count_limits_output(self, mocker, tmp_db):
         """count보다 많은 기사가 와도 count개만 반환."""
         mock_articles = [_article(f"https://example.com/limit-{i}", f"Article {i}") for i in range(10)]
-        mocker.patch("pipeline.curator.research", return_value=mock_articles)
+        _patch_research(mocker, mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
         mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
@@ -196,7 +205,7 @@ class TestRunCurationPipeline:
             "expires_at": "2026-05-18T00:00:00Z",
         }
         mock_articles = [_article("https://example.com/intended", "Intent Article")]
-        research_mock = mocker.patch("pipeline.curator.research", return_value=mock_articles)
+        research_mock = _patch_research(mocker, mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
         mocker.patch("pipeline.load_curation_intent", return_value=intent)
 
@@ -231,7 +240,7 @@ class TestRunCurationPipeline:
             "expires_at": None,
         }
         mock_articles = [_article("https://example.com/both", "Both Profile And Intent")]
-        research_mock = mocker.patch("pipeline.curator.research", return_value=mock_articles)
+        research_mock = _patch_research(mocker, mock_articles)
         mocker.patch("pipeline.load_preference_profile", return_value=profile)
         mocker.patch("pipeline.load_curation_intent", return_value=intent)
 
@@ -248,7 +257,7 @@ class TestRunCurationPipeline:
 
 class TestRecencyFiltering:
     def _setup(self, mocker, articles):
-        mocker.patch("pipeline.curator.research", return_value=articles)
+        _patch_research(mocker, articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
         mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
         from pipeline import run_curation_pipeline
@@ -313,7 +322,7 @@ class TestRecencyFiltering:
 
 class TestFeedTopup:
     def _setup(self, mocker, articles, intent=None):
-        mocker.patch("pipeline.curator.research", return_value=articles)
+        _patch_research(mocker, articles)
         mocker.patch("pipeline.load_preference_profile", return_value=None)
         mocker.patch("pipeline.load_curation_intent", return_value=intent or _INACTIVE_INTENT)
         from pipeline import run_curation_pipeline
@@ -328,8 +337,8 @@ class TestFeedTopup:
         run = self._setup(mocker, [_article("https://example.com/only", "Only One")])
         result = run(count=3)
 
-        assert result["feed_topup"] == 1
-        assert len(result["articles"]) == 2
+        assert result["feed_topup"] == 2
+        assert len(result["articles"]) == 3
 
     def test_no_topup_when_target_met(self, mocker, tmp_db, no_network_feeds):
         run = self._setup(

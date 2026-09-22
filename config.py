@@ -43,9 +43,19 @@ PREFERENCE_ANALYSIS_HOUR = 2  # 새벽 2시 KST: 선호도 분석
 DAILY_POST_HOUR = 6  # 오전 6시 KST: 뉴스 브리핑
 
 # ── 게시 설정 ─────────────────────────────────────
-ARTICLES_PER_POST = 2  # 품질 기준을 통과한 기사만 하루 최대 2개 게시
-MORE_ARTICLES_MAX = 2  # 수동 요청도 한 번에 최대 2개
+# 학습용 브리핑이므로 "적게 뽑아 자주 0건"보다 "넉넉히 뽑아 매일 읽을거리"가 목표다.
+# 2개 목표는 수율 손실(검색→본문검증→편집심사) 한 단계만 어긋나도 0~1건이 됐다.
+ARTICLES_PER_POST = 6  # 품질 기준을 통과한 기사만 하루 최대 6개 게시
+MORE_ARTICLES_MAX = 6  # 수동 요청도 한 번에 최대 6개
 MAX_PER_SOURCE = 10  # 소스당 최대 수집 수
+# 한 브리핑에 같은 소스가 몇 개까지 들어갈 수 있는지. 실측(2026-09-23)에서 6건 중
+# 2건이 같은 블로그, 3건이 같은 도구(GPT-6 Astra) 소개였다. 학습용 피드는 폭이 생명이다.
+MAX_PER_SOURCE_IN_POST = 2
+# 같은 주제(예: 같은 도구 소개)로 몇 건까지 허용할지. 소스 상한만으로는 서로 다른
+# 블로그가 같은 도구를 다룬 글 3건이 그대로 통과한다(실측).
+MAX_PER_TOPIC_IN_POST = 2
+# 목표에 못 미쳐도 이 수 이상이면 정상 브리핑으로 본다(0건 방지용 하한).
+MIN_ACCEPTABLE_ARTICLES = 2
 
 # ── 랭킹 정규화 ───────────────────────────────────
 # 모든 프로듀서(Claude 웹 검색 / HackerNews / RSS)는 platform_score를
@@ -57,33 +67,82 @@ PLATFORM_SCORE_BAND_MAX = 100.0
 # web_search 도구에는 날짜 필터 파라미터가 존재하지 않는다.
 # 따라서 신선도는 (1) 프롬프트에 오늘 날짜를 주입하고
 #              (2) published_at을 코드에서 하드 필터링해 강제한다.
-RECENCY_MAX_AGE_DAYS = 7  # 이 일수를 넘긴 기사는 폐기
-RECENCY_PREFERRED_AGE_DAYS = 2  # 프롬프트에서 우선 요청할 기간
+#
+# 7일 컷은 너무 빡빡했다. 실측(2026-09-23)에서 모델이 스스로 나열한 후보 13개 중
+# 7개를 "7일 초과"로 폐기했고, 그중에는 실무자가 쓴 심층 가이드가 다수였다.
+# 실무 아티클의 유통 주기는 2~4주이므로 기본 컷을 14일로 넓히고, 신선도 우위는
+# 하드 컷이 아니라 랭킹 배율(recency_multiplier)로 유지한다.
+RECENCY_MAX_AGE_DAYS = 14  # 이 일수를 넘긴 기사는 폐기 (필라별로 재정의됨)
+RECENCY_PREFERRED_AGE_DAYS = 3  # 프롬프트에서 우선 요청할 기간
+# 목표 미달 시 단계적으로 넓히는 신선도 창. 마지막 단계는 에버그린 학습자료까지 허용한다.
+RECENCY_RELAXATION_DAYS = (14, 30, 90)
 
 # ── 수집 신뢰성 설정 ──────────────────────────────
 # 목표 수량을 채우기 위한 오버페치·재시도 파라미터.
-# 중복(이미 게시)·신선도 미달로 버려지는 양을 흡수한다.
+# 중복(이미 게시)·본문검증·편집심사에서 버려지는 양을 흡수한다.
+#
+# 실측 종단 수율(2026-09-23, 2일차): 검색 8 → 중복제거 5 → 본문검증 3 → 심사통과 1.
+# 즉 발행 1건당 검색 후보 약 8건이 필요하다. 기존 OVERFETCH_MIN=8은 목표 2건에
+# 대해 구조적으로 부족했다(기대값 1.0건).
 OVERFETCH_MULTIPLIER = 4  # 목표 N개 → N×4개 요청
-OVERFETCH_MIN = 8  # 오버페치 최소 요청 수
-OVERFETCH_MAX = 24  # 오버페치 최대 요청 수 (토큰 보호)
-TOPUP_MAX_ROUNDS = 2  # 목표 미달 시 추가 검색 횟수
+OVERFETCH_MIN = 12  # 오버페치 최소 요청 수
+OVERFETCH_MAX = 36  # 오버페치 최대 요청 수 (토큰 보호)
+# 라운드마다 필라 수만큼 호출이 나가므로 라운드 하나가 곧 3회 검색이다.
+# 부족분은 상위 파이프라인의 완화 패스가 다시 채우므로 여기서는 1회로 묶는다.
+TOPUP_MAX_ROUNDS = 1  # 목표 미달 시 추가 검색 라운드 수
+# 게시 1건당 필요한 검색 후보 수. 실측(2026-09-23 라이브): 검색 29건 → 본문검증 15건
+# → 심사통과 11건. 즉 후보 2.5건당 게시 가능 1건이다. 이 배수를 넘겼는데도 톱업을
+# 돌리면 라운드당 약 $1를 더 쓰고 얻는 게 거의 없다.
+CANDIDATES_PER_PUBLISHED = 2.5
 EXCLUDE_URL_LOOKBACK_DAYS = 45  # 중복 제외 대상 게시 이력 조회 기간
 EXCLUDE_URL_PROMPT_LIMIT = 40  # 프롬프트에 나열할 제외 URL 최대 수
+# 본문 검증은 네트워크 대기가 대부분이라 순차 실행하면 후보 수에 비례해 느려진다.
+VERIFY_FETCH_WORKERS = 8
+
+# ── 큐레이션 필라 ─────────────────────────────────
+# 검색 호출 1회에 토픽 8개를 모두 맡기면 모델은 2~3개만 조회하고 끝낸다
+# (실측: max_uses=6인데 5회 사용, 결과 8건 중 5건이 claude_code 계열).
+# 주제군(필라)마다 호출을 분리하면 각 필라가 자기 검색 예산을 온전히 쓰고,
+# 필라별로 다른 신선도 정책을 적용할 수 있다.
+#
+# weight: 목표 수량을 필라에 배분하는 비율
+# max_age_days: 필라별 신선도 컷 (실무는 최신, 도구·학습자료는 에버그린 허용)
+PILLAR_SETTINGS: dict[str, dict] = {
+    "ai_practice": {"label": "AI 개발 실무", "weight": 5, "max_age_days": 14},
+    "ai_game": {"label": "AI × 게임 개발", "weight": 3, "max_age_days": 45},
+    "graphics_3d": {"label": "그래픽스 · 저비용 3D", "weight": 2, "max_age_days": 120},
+}
+# 필라 호출을 동시에 보낸다. 순차로 돌리면 필라 3개 × 60초 = 3분이 된다.
+PILLAR_SEARCH_WORKERS = 3
+
+# 저장된 기사는 필라를 잃고 content_type만 키워드로 남는다. 저수지에서 다시 꺼낼 때
+# 같은 신선도 정책을 적용하려면 분류 → 창 매핑이 필요하다.
+CONTENT_TYPE_MAX_AGE_DAYS: dict[str, int] = {
+    "ai_programming": 14,
+    "dev_feed": 14,
+    "game_asset_workflow": 45,
+    "ai_made_game": 45,
+    "graphics_3d_resource": 120,
+}
 
 # ── Claude 호출 설정 ──────────────────────────────
 # max_tokens는 thinking + 응답 텍스트의 합산 하드 캡이다. Opus 5부터 thinking이
 # 기본 활성이라, 서버사이드 web_search 블록과 thinking이 같은 예산을 나눠 쓴다.
 # 예산이 모자라면 JSON이 잘려 조용히 0건이 된다. (실측: 텍스트만 1,300~8,400)
 SEARCH_MAX_TOKENS = 16000
-# 검수는 후보 전체를 한 번에 판정하고 한국어 필드까지 생성하므로 탐색보다 출력이 길다.
+# 검수는 후보를 배치로 판정하고 한국어 필드까지 생성하므로 탐색보다 출력이 길다.
 REVIEW_MAX_TOKENS = 16000
+# 한 번에 심사할 후보 수. 후보 전체를 한 호출에 넣으면 발췌 5,000자 × N으로
+# 입력이 폭발하고 출력이 max_tokens에 잘려 **전량 폐기**된다(실측 실패 경로).
+REVIEW_BATCH_SIZE = 8
+REVIEW_BATCH_WORKERS = 3
 # thinking 분량을 통제하는 레버. 두 호출 모두 구조화 JSON 추출이라 medium이면 충분하다.
 # "xhigh"/"max"는 thinking 비활성화와 함께 쓸 수 없다 (400).
 CLAUDE_EFFORT = "medium"
 WEB_SEARCH_TOOL_TYPE = "web_search_20260209"
-# 탐색 토픽이 8개인데 3회로는 토픽 대부분이 조회조차 되지 않는다.
-# 실측(2026-09-07): 3회 검색 → 결과 22건 수신 → 채택 0건.
-WEB_SEARCH_MAX_USES = 6
+# 필라당 검색 예산. 필라 하나가 토픽 4~6개를 커버하므로 토픽당 1~2회는 나와야 한다.
+# 실측(2026-09-23): max_uses=6일 때 모델이 5회 사용 → 토픽 8개 중 4개만 조회.
+WEB_SEARCH_MAX_USES = 8
 # web_search_20260209는 allowed_callers 기본값이 code_execution이라
 # programmatic tool calling 미지원 모델에서 400이 발생한다. 명시적으로 direct 지정.
 WEB_SEARCH_ALLOWED_CALLERS = ["direct"]
@@ -254,29 +313,55 @@ YOUTUBE_SEARCH_QUERIES = [
 ]
 
 # ── RSS 피드 ──────────────────────────────────────
+# 웹 검색이 실패하거나 목표에 미달할 때 쓰는 2차 경로.
+# 뉴스 매체보다 **실무자 1차 소스**를 우선한다 — 편집 심사가 뉴스성 기사를
+# 어차피 떨어뜨리므로, 뉴스 피드만 넣어두면 보충이 항상 실패한다.
 RSS_FEEDS: dict[str, str] = {
+    # AI 실무 — 1차 소스·실무자 블로그
+    "Simon Willison": "https://simonwillison.net/atom/everything/",
+    "Anthropic News": "https://www.anthropic.com/rss.xml",
+    "OpenAI Blog": "https://openai.com/blog/rss.xml",
+    "Hugging Face Blog": "https://huggingface.co/blog/feed.xml",
+    "LangChain Blog": "https://blog.langchain.com/rss/",
+    "eugeneyan": "https://eugeneyan.com/rss/",
+    "Hamel Husain": "https://hamel.dev/index.xml",
+    "Lilian Weng": "https://lilianweng.github.io/index.xml",
+    "GitHub Blog Engineering": "https://github.blog/engineering/feed/",
+    "Martin Fowler": "https://martinfowler.com/feed.atom",
+    "InfoQ AI": "https://feed.infoq.com/ai-ml-data-eng/",
+    # 뉴스 매체 (보조)
     "VentureBeat AI": "https://venturebeat.com/category/ai/feed/",
-    "The Verge AI": "https://www.theverge.com/ai-artificial-intelligence/rss/index.xml",
-    "Medium AI": "https://medium.com/feed/tag/artificial-intelligence",
-    "ZDNet Korea": "https://zdnet.co.kr/rss/",
-    "IT조선": "https://it.chosun.com/section/rss/all.php",
     "Ars Technica AI": "https://feeds.arstechnica.com/arstechnica/technology-lab",
-    # 게임 개발 AI
+    # 게임 개발 · 그래픽스 · 3D
     "80 Level": "https://80.lv/feed/",
     "Game Developer": "https://www.gamedeveloper.com/rss.xml",
     "GDC Blog": "https://gdconf.com/rss.xml",
+    "Godot Engine": "https://godotengine.org/rss.xml",
+    "Blender Developers": "https://code.blender.org/feed/",
+    "NVIDIA Developer": "https://developer.nvidia.com/blog/feed/",
     # Reddit r/gamedev RSS는 아티클 피드가 아니라 토론 피드라서 제외했다.
     # (QA에서 "Scam alert? I am getting a lot of PM in discord..." 같은 잡담이
     #  게시 후보로 올라왔다.) Reddit은 HN처럼 점수 기반 필터가 있어야 쓸 수 있다.
 }
 
-# RSS에서 AI 키워드 필터링이 필요 없는 소스 (이미 AI 특화)
+# RSS에서 AI 키워드 필터링이 필요 없는 소스.
+# 피드 전체가 이미 대상 주제이거나(AI 특화), 그래픽스·게임 개발 1차 소스라
+# AI 키워드를 요구하면 정작 필요한 3D·셰이더 자료가 전부 걸러진다.
 RSS_NO_FILTER_SOURCES = {
+    "Simon Willison",
+    "Anthropic News",
+    "OpenAI Blog",
+    "Hugging Face Blog",
+    "LangChain Blog",
+    "eugeneyan",
+    "Hamel Husain",
+    "Lilian Weng",
+    "InfoQ AI",
     "VentureBeat AI",
-    "The Verge AI",
-    "Medium AI",
     "80 Level",
     "Game Developer",
+    "Godot Engine",
+    "Blender Developers",
 }
 
 # ── 게임 개발 + AI 기사 필수 포함 키워드 ───────────

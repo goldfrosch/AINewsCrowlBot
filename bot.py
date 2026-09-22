@@ -158,8 +158,10 @@ def _stages_line(result: dict) -> str:
     """단계별 통과율 한 줄. 0건일 때 어느 게이트가 막았는지 짐작게 한다."""
     stages = result.get("stages") or {}
     models = SEARCH_MODEL if SEARCH_MODEL == REVIEW_MODEL else f"{SEARCH_MODEL}+{REVIEW_MODEL}"
+    passes = len(stages.get("passes") or [])
+    pass_note = f"완화패스 {passes} · " if passes > 1 else ""
     return (
-        f"본문검증 {stages.get('verify_passed', 0)}/{stages.get('verify_attempted', 0)} · "
+        f"{pass_note}본문검증 {stages.get('verify_passed', 0)}/{stages.get('verify_attempted', 0)} · "
         f"심사 {stages.get('review_kept', 0)}/{stages.get('review_candidates', 0)} · "
         f"모델 `{models}`"
     )
@@ -184,6 +186,14 @@ def _summary_message(result: dict, count: int) -> str:
 
 def _failure_message(result: dict, count: int) -> str:
     """게시할 기사가 0건일 때 원인을 특정해서 알린다."""
+    if result.get("fatal_api_error"):
+        # 실측: 크레딧이 떨어진 채로 방치되면 매일 조용히 0건이 나간다.
+        # 사람이 조치해야 풀리는 문제이므로 조치 방법까지 적어 알린다.
+        return (
+            "🛑 Anthropic API 계정 문제로 큐레이션을 중단했습니다.\n"
+            f"`{str(result.get('error'))[:300]}`\n"
+            "→ 크레딧 잔액 또는 ANTHROPIC_API_KEY를 확인하세요. 해결 전까지 매일 0건이 반복됩니다."
+        )
     if result.get("error"):
         return f"❌ 큐레이션 실패: {result['error'][:400]}"
     if result.get("raw_count", 0) == 0:
@@ -195,10 +205,10 @@ def _failure_message(result: dict, count: int) -> str:
         )
     stages = result.get("stages") or {}
     if stages.get("verify_attempted") and not stages.get("verify_passed"):
-        return (
-            f"📭 후보 {stages['verify_attempted']}개를 수집했지만 본문 검증을 통과한 기사가 없습니다.\n"
-            "페이지 접속 차단·언어·발행일·본문 길이 기준을 확인하세요."
-        )
+        reasons = stages.get("verify_reasons") or {}
+        top = sorted(reasons.items(), key=lambda item: item[1], reverse=True)[:4]
+        detail = "\n".join(f"· {reason} ({n}건)" for reason, n in top) or "사유 미기록"
+        return f"📭 후보 {stages['verify_attempted']}개를 수집했지만 본문 검증을 통과한 기사가 없습니다.\n{detail}"
     if stages.get("review_candidates") and not stages.get("review_kept"):
         reason_counts = stages.get("reason_counts") or {}
         top = sorted(reason_counts.items(), key=lambda item: item[1], reverse=True)[:3]

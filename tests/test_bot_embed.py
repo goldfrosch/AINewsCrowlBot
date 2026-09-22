@@ -122,3 +122,56 @@ def test_summary_message_includes_stage_pass_rates_and_model() -> None:
 
 def test_stages_line_tolerates_missing_stages() -> None:
     assert "본문검증 0/0" in _stages_line({})
+
+
+def test_failure_message_lists_verification_gate_reasons() -> None:
+    """'본문 검증 실패'만으로는 차단인지 기한초과인지 알 수 없어 조치할 수 없다."""
+    result = _result(
+        {
+            "verify_attempted": 5,
+            "verify_passed": 0,
+            "verify_reasons": {"http_403": 3, "timeout": 2},
+        }
+    )
+
+    message = _failure_message(result, 6)
+
+    assert "http_403 (3건)" in message
+    assert "timeout (2건)" in message
+
+
+def test_failure_message_surfaces_account_problem_with_remedy() -> None:
+    """크레딧 소진은 사람이 조치해야 풀린다. 조용한 0건으로 방치하면 100일도 간다."""
+    result = dict(
+        _result({}),
+        fatal_api_error=True,
+        error="복구 불가 API 오류: 400: Your credit balance is too low to access the Anthropic API.",
+    )
+
+    message = _failure_message(result, 6)
+
+    assert "Anthropic API 계정 문제" in message
+    assert "크레딧 잔액" in message
+    assert "ANTHROPIC_API_KEY" in message
+
+
+def test_summary_message_reports_relaxation_passes() -> None:
+    result = {
+        "articles": [{"url": "u"}],
+        "raw_count": 20,
+        "stale_dropped": 2,
+        "quality_dropped": 10,
+        "new_count": 6,
+        "feed_topup": 0,
+        "max_age_days": 30,
+        "error": None,
+        "stages": {
+            "verify_attempted": 20,
+            "verify_passed": 12,
+            "review_candidates": 12,
+            "review_kept": 6,
+            "passes": [{"level": 0}, {"level": 1}],
+        },
+    }
+
+    assert "완화패스 2" in _summary_message(result, 6)

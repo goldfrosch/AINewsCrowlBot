@@ -119,7 +119,7 @@ def test_verify_articles_reports_attempt_and_pass_counts(mocker) -> None:
     """0건 원인 규명: 수집 시도 수와 본문 검증 통과 수를 report로 돌려준다."""
     import article_quality
 
-    mocker.patch.object(article_quality, "fetch_html", return_value=None)
+    mocker.patch.object(article_quality, "fetch_page", return_value=(None, "http_403"))
     report: dict = {}
 
     result = verify_articles(
@@ -129,4 +129,22 @@ def test_verify_articles_reports_attempt_and_pass_counts(mocker) -> None:
     )
 
     assert result == []
-    assert report == {"attempted": 2, "passed": 0}
+    assert report == {"attempted": 2, "passed": 0, "reasons": {"http_403": 2}}
+
+
+def test_verify_articles_reports_per_gate_rejection_reasons(mocker) -> None:
+    """차단·타임아웃·본문 부족을 구분해야 어느 게이트를 완화할지 판단할 수 있다."""
+    import article_quality
+
+    outcomes = {
+        "https://example.com/blocked": (None, "http_403"),
+        "https://example.com/slow": (None, "timeout"),
+        "https://example.com/thin": ("<html lang='en'><body><article>short</article></body></html>", "ok"),
+    }
+    mocker.patch.object(article_quality, "fetch_page", side_effect=lambda _client, url: outcomes[url])
+    report: dict = {}
+
+    verify_articles([_article(url) for url in outcomes], max_age_days=7, report=report)
+
+    assert report["passed"] == 0
+    assert report["reasons"] == {"http_403": 1, "timeout": 1, "body_too_short": 1}
