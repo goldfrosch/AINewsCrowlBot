@@ -153,7 +153,9 @@ WEB_SEARCH_MAX_USES = 8
 #   "direct":  검색 결과를 그대로 컨텍스트에 싣는다. programmatic tool calling 미지원 모델도 동작한다.
 #   "dynamic": 서버 코드 실행이 검색 결과를 먼저 걸러(dynamic filtering) 필요한 부분만 싣는다.
 #              Claude 4.6 이후 모델 전용이며 코드 실행 추가 요금은 없다(Anthropic 문서).
-#              탐색 비용의 54%가 검색 결과의 캐시 기록이라(2026-09-28 실측) 입력 토큰이 곧 비용이다.
+# 라이브 A/B(2026-09-28, sonnet-4-6, dry run 각 1회): 비용 $1.021 vs $1.016으로 같았다. dynamic은
+# 캐시 기록이 57% 줄었지만 검색 횟수(18→24회)·출력 토큰(+68%)·캐시 히트(3.2배)가 늘어 상쇄됐고,
+# 실행 시간은 278초 → 486초로 늘었다. 그래서 기본값은 direct다.
 WEB_SEARCH_MODE: str = os.getenv("WEB_SEARCH_MODE", "direct")
 # web_search_20260209는 allowed_callers 기본값이 code_execution이라
 # programmatic tool calling 미지원 모델에서 400이 발생한다. direct 모드에서는 명시적으로 지정한다.
