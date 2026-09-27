@@ -25,6 +25,7 @@ TOKEN_DB_PATH = Path("data/token_usage.db")
 MODEL_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-opus-5": (5.0, 25.0),
     "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-sonnet-5": (2.0, 10.0),
 }
 # 모르는 모델은 과소평가보다 과대평가가 안전하므로 가장 비싼 단가를 쓴다.
 _FALLBACK_PRICING: tuple[float, float] = (5.0, 25.0)
