@@ -24,6 +24,7 @@ from config import (
     SEARCH_MODEL,
     WEB_SEARCH_ALLOWED_CALLERS,
     WEB_SEARCH_MAX_USES,
+    WEB_SEARCH_MODE,
     WEB_SEARCH_TOOL_TYPE,
 )
 from text_utils import extract_json_array
@@ -68,18 +69,17 @@ class SearchOutcome:
         return self.error is not None and is_fatal_error(self.error)
 
 
-def web_search_tool(max_uses: int = WEB_SEARCH_MAX_USES) -> dict:
+def web_search_tool(max_uses: int = WEB_SEARCH_MAX_USES, mode: str = WEB_SEARCH_MODE) -> dict:
     """web_search 도구 스펙.
 
-    allowed_callers를 명시하는 이유: web_search_20260209는 기본값이
+    direct 모드에서 allowed_callers를 명시하는 이유: web_search_20260209는 기본값이
     code_execution이라 programmatic tool calling 미지원 모델에서 400이 난다.
+    dynamic 모드는 그 기본값을 그대로 둬 서버가 코드 실행으로 검색 결과를 먼저 거르게 한다.
     """
-    return {
-        "type": WEB_SEARCH_TOOL_TYPE,
-        "name": "web_search",
-        "max_uses": max_uses,
-        "allowed_callers": list(WEB_SEARCH_ALLOWED_CALLERS),
-    }
+    tool = {"type": WEB_SEARCH_TOOL_TYPE, "name": "web_search", "max_uses": max_uses}
+    if mode != "dynamic":
+        tool["allowed_callers"] = list(WEB_SEARCH_ALLOWED_CALLERS)
+    return tool
 
 
 def _collect_text(response) -> str:

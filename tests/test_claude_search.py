@@ -32,11 +32,15 @@ def _payload(*urls):
 
 
 class TestWebSearchTool:
-    def test_declares_direct_caller(self):
-        """web_search_20260209는 allowed_callers 기본값이 code_execution이라 400이 난다."""
-        tool = claude_search.web_search_tool()
+    def test_direct_mode_pins_direct_caller(self):
+        """web_search_20260209는 allowed_callers 기본값이 code_execution이라 미지원 모델에서 400이 난다."""
+        tool = claude_search.web_search_tool(mode="direct")
         assert tool["allowed_callers"] == ["direct"]
         assert tool["name"] == "web_search"
+
+    def test_dynamic_mode_keeps_server_default_caller(self):
+        """allowed_callers를 비워 두면 서버가 코드 실행으로 검색 결과를 먼저 거른다(dynamic filtering)."""
+        assert "allowed_callers" not in claude_search.web_search_tool(mode="dynamic")
 
 
 class TestSearchArticles:

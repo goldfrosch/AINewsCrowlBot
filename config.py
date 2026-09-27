@@ -149,8 +149,14 @@ WEB_SEARCH_TOOL_TYPE = "web_search_20260209"
 # 필라당 검색 예산. 필라 하나가 토픽 4~6개를 커버하므로 토픽당 1~2회는 나와야 한다.
 # 실측(2026-09-23): max_uses=6일 때 모델이 5회 사용 → 토픽 8개 중 4개만 조회.
 WEB_SEARCH_MAX_USES = 8
+# web_search 호출 경로.
+#   "direct":  검색 결과를 그대로 컨텍스트에 싣는다. programmatic tool calling 미지원 모델도 동작한다.
+#   "dynamic": 서버 코드 실행이 검색 결과를 먼저 걸러(dynamic filtering) 필요한 부분만 싣는다.
+#              Claude 4.6 이후 모델 전용이며 코드 실행 추가 요금은 없다(Anthropic 문서).
+#              탐색 비용의 54%가 검색 결과의 캐시 기록이라(2026-09-28 실측) 입력 토큰이 곧 비용이다.
+WEB_SEARCH_MODE: str = os.getenv("WEB_SEARCH_MODE", "direct")
 # web_search_20260209는 allowed_callers 기본값이 code_execution이라
-# programmatic tool calling 미지원 모델에서 400이 발생한다. 명시적으로 direct 지정.
+# programmatic tool calling 미지원 모델에서 400이 발생한다. direct 모드에서는 명시적으로 지정한다.
 WEB_SEARCH_ALLOWED_CALLERS = ["direct"]
 
 # ── 결정론적 신선 소스 (HN / RSS) ─────────────────
