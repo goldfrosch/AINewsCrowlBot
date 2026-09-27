@@ -35,7 +35,7 @@ ranker.py        기사 점수 계산 & 피드백 처리
 database.py      SQLite CRUD
 config.py        환경변수 & 전역 상수
 curation_intent.py  런타임 큐레이션 의도 로더
-article_fetch.py canonicalize_url(저장 키) / request_url(요청 URL) / fetch_page(사유 반환)
+article_fetch.py canonicalize_url(저장 키) / dedup_key(중복 판정) / request_url(요청 URL) / fetch_page(사유 반환)
 article_quality.py 페이지 병렬 검증 · 근중복/주제중복 판정 · 신뢰 도메인
 editorial_review.py 배치 심사 · 완화 단계별 임계값 · 한국어 브리핑 생성
 crawlers/
@@ -70,21 +70,30 @@ python -m ruff check --fix . && python -m ruff format .
 
 필수: `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID`
 필수: `ANTHROPIC_API_KEY` (웹 검색과 별도 품질 심사에 사용)
-선택: `CLAUDE_MODEL`, `ALLOWED_USER_IDS`
+선택: `CLAUDE_MODEL`, `ALLOWED_USER_IDS`, `WEB_SEARCH_MODE`(`direct`|`dynamic`, 기본 `direct`)
 
 ## 수집 파이프라인
 
 ```
 0. 저수지 확인        전날 잉여(pending)가 목표를 채우면 검색 없이 종료 — 비용 $0
-1. 완화 패스 1~3      목표에 미달할 때마다 창과 품질컷을 한 단계씩 넓혀 재검색
+1. 완화 패스 1~3      목표에 미달할 때마다 창과 품질컷을 한 단계씩 넓힌다
                       창 14일/컷 62·70 → 30일/58·64 → 90일/55·60
-   └ curator.research()  필라 3개를 동시 호출(각자 검색 예산 8회)
-     └ 톱업 라운드      후보가 목표×2.5에 못 미칠 때만 1회 추가 (비용 방어)
-2. article_quality    페이지를 병렬로 받아 본문·언어·발행일 검증 (사유별 계측)
-3. editorial_review   8건씩 배치로 병렬 심사 — 한 배치가 잘려도 나머지는 생존
-4. crawlers.feed_pool 그래도 미달이면 HN(30점 이상)·RSS 1차 소스로 보충
-5. _select            분류별 신선도 창 + 소스/주제 다양성 상한으로 최종 선정
+   ├ 보류 판정 재적용  앞 패스에서 점수 컷에만 걸린 심사 판정을 완화된 컷으로 다시 판정 (API 호출 없음)
+   └ curator.research()  SearchSession으로 패스 사이 상태를 이어 받는다
+     ├ 필라 동시 호출    1패스는 3개 전부, 이후 패스는 신선도 창이 넓어진 필라만 (각자 검색 예산 8회)
+     └ 톱업 라운드      후보가 목표×2.5에 못 미칠 때만 1회 추가. 라운드 번호는 패스를 넘어 이어진다
+2. 중복 제거          저장된 URL과 이번 실행에서 이미 심사로 넘긴 URL을 정규형(dedup_key)으로 뺀다
+3. article_quality    페이지를 병렬로 받아 본문·언어·발행일 검증 (사유별 계측)
+4. editorial_review   8건씩 배치로 병렬 심사 — 한 배치가 잘려도 나머지는 생존
+5. crawlers.feed_pool 그래도 미달이면 HN(30점 이상)·RSS 1차 소스로 보충
+6. _select            분류별 신선도 창 + 소스/주제 다양성 상한으로 최종 선정
 ```
+
+**패스 재방송 방지**: 패스마다 처음부터 다시 검색하면 창이 그대로인 필라(그래픽스는 세 패스 모두
+120일)가 1패스와 같은 프롬프트로 같은 결과를 다시 산다. 그래서 창이 넓어진 필라만 재검색하고,
+품질컷 완화는 보관해 둔 심사 판정에 먼저 적용한다. 심사 프롬프트는 단계별 컷이 아니라 KEEP
+최저선(가장 완화된 컷)만 알려 주므로 판정이 완화 단계와 무관하다. 폴백(`curator._fallback_research`)은
+에이전트가 실패했을 때(검색이 전부 오류)만 돈다 — 빈 결과는 실패가 아니다.
 
 **서킷 브레이커**: 크레딧 소진·인증 실패 같은 복구 불가 오류는 `claude_search.FatalSearchError`로
 즉시 전파해 남은 패스를 중단한다. 이게 없으면 실행 1회에 같은 실패를 18번 반복하고
@@ -110,6 +119,10 @@ HTTP 요청에는 반드시 `request_url()`을 쓴다 — 슬래시를 유지하
 Django·WordPress·Ghost 계열이 301을 돌려주고, 홉마다 재정규화되며 **무한 리다이렉트**에 빠진다.
 실측에서 simonwillison.net을 비롯한 최고 품질 실무자 블로그가 이 버그로 전멸했다.
 
+URL을 **비교**할 때는 양쪽을 모두 `dedup_key()`(정규형, 정규화할 수 없으면 원문)로 맞춘다.
+모델·피드가 준 원본 URL을 저장된 정규형과 문자열 그대로 비교하던 때는, 이미 저장한 글이
+본문 검증과 유료 심사를 다시 거친 뒤 UNIQUE 제약에서야 버려졌다(시뮬레이션: 심사 후보의 절반).
+
 ## Ranking Formula
 
 `final_score = normalize(platform_score) × source_multiplier × avg(keyword_multipliers) × recency_multiplier`
@@ -131,6 +144,7 @@ Django·WordPress·Ghost 계열이 301을 돌려주고, 홉마다 재정규화�
 | `CANDIDATES_PER_PUBLISHED` | 2.5 | 이 배수를 넘기면 톱업 라운드를 생략한다 (비용 방어) |
 | `TOPUP_MAX_ROUNDS` | 1 | 라운드 1회 = 필라 수만큼 검색 호출 |
 | `WEB_SEARCH_MAX_USES` | 8 | 필라당 검색 예산 |
+| `WEB_SEARCH_MODE` | `direct` | `dynamic`은 서버 코드 실행이 검색 결과를 먼저 거른다. 라이브 A/B에서 비용은 같고 75% 느려 기본값은 direct |
 | `REVIEW_BATCH_SIZE` | 8 | 심사 배치 크기. 잘려도 그 배치만 잃는다 |
 | `VERIFY_FETCH_WORKERS` | 8 | 본문 검증 병렬도 |
 | `MAX_PER_SOURCE_IN_POST` | 2 | 브리핑 1회 소스 상한 |
@@ -139,6 +153,8 @@ Django·WordPress·Ghost 계열이 301을 돌려주고, 홉마다 재정규화�
 | `REVIEW_MAX_TOKENS` | 16000 | 편집 심사 출력 예산. 잘리면 2배로 1회 재시도 |
 | `CLAUDE_EFFORT` | `medium` | thinking 분량 제어 (`low`~`max`) |
 | `EXCLUDE_URL_LOOKBACK_DAYS` | 45 | 중복 회피용 게시 이력 조회 기간 |
+| `EXCLUDE_URL_PROMPT_LIMIT` | 80 | 탐색 프롬프트 제외 목록 상한 (이번 실행 수집분 → 저수지 → 게시 이력 순) |
+| `MORE_COOLDOWN_SECONDS` | 600 | `!more` 서버 공유 쿨다운. 실행 자체는 락으로 한 번에 하나만 |
 | `FEED_MAX_PER_SOURCE` | 2 | 후보풀 소스별 상한 |
 
 실측 수율(2026-09-23 라이브): 검색 18 → 본문검증 9 → 심사통과 7 → 게시 6, 실행당 $1.14.
