@@ -49,12 +49,17 @@ tools=[{"type": "web_search_20260209", "name": "web_search"}]
 
 이 프로젝트에서의 에러 처리 패턴: `curator.py` `_research_round()` 참조.
 
-## 모델 가격표 (2026-09-04)
+## 모델 가격표 (2026-09-28)
 
 | 모델       | ID                  | 입력  | 출력   | 컨텍스트 |
 | ---------- | ------------------- | ----- | ------ | -------- |
 | Opus 5     | `claude-opus-5`     | $5/1M | $25/1M | 1M       |
+| Sonnet 5   | `claude-sonnet-5`   | $2/1M | $10/1M | 1M       |
 | Sonnet 4.6 | `claude-sonnet-4-6` | $3/1M | $15/1M | 200K     |
+
+Sonnet 5 주의점: 새 토크나이저라 같은 글에 토큰이 약 30% 더 나오고, `thinking` 필드가 없으면
+적응형 thinking이 켜진다(Sonnet 4.6은 thinking 없이 동작). `temperature`/`top_p`/`top_k`를
+기본값 외로 주거나 `budget_tokens` 방식 thinking을 쓰면 400이다.
 
 ## 이 프로젝트에서의 사용 위치
 

@@ -18,7 +18,7 @@
 ## Tech Stack
 
 - Python 3.11+ / pip / SQLite (`data/bot.db`)
-- discord.py 2.x · Anthropic SDK · `web_search_20260209` (기본 모델 `claude-opus-5`)
+- discord.py 2.x · Anthropic SDK · `web_search_20260209` (탐색·심사 기본 모델 `claude-sonnet-5`)
 - feedparser / requests — HN·RSS 후보풀
 
 ## File Map

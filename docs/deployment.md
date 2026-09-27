@@ -121,7 +121,7 @@ DISCORD_CHANNEL_ID=채널_ID
 ANTHROPIC_API_KEY=클로드_API_키
 
 # 선택
-CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_MODEL=claude-sonnet-5
 EOF
 ```
 
