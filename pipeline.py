@@ -20,6 +20,7 @@ import editorial_review
 import recency
 from agents.agent_spec import pillar_max_age_days
 from agents.preference_analysis import load_preference_profile
+from article_fetch import dedup_key
 from config import (
     ARTICLES_PER_POST,
     CONTENT_TYPE_MAX_AGE_DAYS,
@@ -158,16 +159,29 @@ def _merge_stage_report(stages: dict, verify: dict, review: dict, dup_removed: i
 
 
 def _review_candidates(articles, max_age_days: int, recent_titles: list[str], stages: dict, relax_level: int = 0):
+    # 이미 저장한 글은 정규형 URL로 먼저 뺀다. 원본 URL(후행 슬래시·추적 파라미터)을 저장된
+    # 정규형과 문자열 그대로 비교하던 때는 저장한 글이 본문 검증과 유료 심사를 다시 거친 뒤
+    # 저장 단계의 UNIQUE 제약에서야 버려졌다(시뮬레이션: 심사 후보의 최대 절반).
+    known = {dedup_key(url) for url in db.get_all_article_urls()}
+    fresh = []
+    for article in articles:
+        key = dedup_key(article.url)
+        if key in known:
+            continue
+        known.add(key)
+        fresh.append(article)
+
     verify_report: dict = {}
     verified = article_quality.verify_articles(
-        articles,
+        fresh,
         lambda article: _article_window(article, max_age_days),
         report=verify_report,
     )
     unique = article_quality.remove_near_duplicates(verified, recent_titles)
     review_report: dict = {}
     reviewed = editorial_review.review_articles(unique, report=review_report, relax_level=relax_level)
-    _merge_stage_report(stages, verify_report, review_report, len(verified) - len(unique))
+    duplicates = len(articles) - len(fresh) + len(verified) - len(unique)
+    _merge_stage_report(stages, verify_report, review_report, duplicates)
     return reviewed
 
 

@@ -97,7 +97,8 @@ TOPUP_MAX_ROUNDS = 1  # 목표 미달 시 추가 검색 라운드 수
 # 돌리면 라운드당 약 $1를 더 쓰고 얻는 게 거의 없다.
 CANDIDATES_PER_PUBLISHED = 2.5
 EXCLUDE_URL_LOOKBACK_DAYS = 45  # 중복 제외 대상 게시 이력 조회 기간
-EXCLUDE_URL_PROMPT_LIMIT = 40  # 프롬프트에 나열할 제외 URL 최대 수
+# 프롬프트에 나열할 제외 URL 최대 수. 저수지 URL까지 싣도록 40에서 늘렸다(약 2천 토큰, 호출당 1센트 미만).
+EXCLUDE_URL_PROMPT_LIMIT = 80
 # 본문 검증은 네트워크 대기가 대부분이라 순차 실행하면 후보 수에 비례해 느려진다.
 VERIFY_FETCH_WORKERS = 8
 

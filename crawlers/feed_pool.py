@@ -22,6 +22,7 @@
   - 제목 매치를 가중하고 설명 매치는 상한을 둬 길이 편향을 없앤다.
 """
 
+from article_fetch import dedup_key
 from config import (
     AI_KEYWORDS,
     FEED_DEFAULT_TIER,
@@ -103,16 +104,22 @@ def collect(
 
 
 def _eligible(candidates: list[Article], excluded: set[str], max_age_days: int) -> list[Article]:
+    # 저장 키(정규형)로 비교한다. 피드 링크에는 추적 파라미터·후행 슬래시가 흔해서
+    # 문자열 그대로 비교하면 이미 저장한 글을 새 후보로 뽑아 몫을 낭비했다.
+    excluded_keys = {dedup_key(url) for url in excluded}
     seen: set[str] = set()
     result: list[Article] = []
     for article in candidates:
-        if not article.url or article.url in excluded or article.url in seen:
+        if not article.url:
+            continue
+        key = dedup_key(article.url)
+        if key in excluded_keys or key in seen:
             continue
         if is_stale(article.published_at, max_age_days=max_age_days):
             continue
         if relevance(article) < FEED_MIN_RELEVANCE:
             continue
-        seen.add(article.url)
+        seen.add(key)
         result.append(article)
     return result
 

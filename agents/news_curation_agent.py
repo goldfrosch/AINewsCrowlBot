@@ -41,6 +41,7 @@ from agents.agent_spec import (
     topics_for_round,
 )
 from agents.search_prompt import build_search_prompt
+from article_fetch import dedup_key
 from config import (
     ANTHROPIC_API_KEY,
     ARTICLES_PER_POST,
@@ -243,15 +244,16 @@ def _absorb(
     dropped: dict[str, int],
     max_age_days: int,
 ) -> None:
+    """정규형 URL(`dedup_key`)로 중복을 거른다. `known_urls`와 `collected`의 키도 정규형이다."""
     for article in articles:
-        url = article["url"]
-        if url in known_urls or url in collected:
+        key = dedup_key(article["url"])
+        if key in known_urls or key in collected:
             dropped["duplicate"] += 1
             continue
         if recency.is_stale(article["published_at"], max_age_days=max_age_days):
             dropped["stale"] += 1
             continue
-        collected[url] = article
+        collected[key] = article
 
 
 def run(
@@ -304,7 +306,8 @@ def run(
     preferences = _apply_external_preferences(_tool_analyze_preferences(), external_preferences)
     print(f"[Agent] 선호도 분석 → {preferences['summary']}")
 
-    known_urls = db.get_all_article_urls()
+    # 저장 키(정규형)로 비교해야 후행 슬래시·추적 파라미터만 다른 같은 글을 알아본다.
+    known_urls = {dedup_key(url) for url in db.get_all_article_urls()}
     collected: dict[str, dict] = {}
     dropped = {"duplicate": 0, "stale": 0}
 

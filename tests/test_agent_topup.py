@@ -160,6 +160,24 @@ class TestFiltering:
         assert "https://a/dup" not in urls
         assert "https://a/new" in urls
 
+    def test_url_variants_of_stored_article_are_dropped(self, mocker, tmp_db):
+        """저장 키는 정규형이다. 후행 슬래시·추적 파라미터만 다른 같은 글을 새 글로 보면 안 된다."""
+        db.upsert_article(
+            {
+                "url": "https://a/dup",
+                "title": "Existing",
+                "source": "S",
+                "description": "",
+                "author": "",
+                "image_url": "",
+                "published_at": days_ago(1),
+                "platform_score": 100.0,
+                "keywords": [],
+            }
+        )
+        articles, _ = _run(mocker, _round("https://a/dup/?utm_source=feed", "https://a/new"))
+        assert [a["url"] for a in articles] == ["https://a/new"]
+
     def test_stale_articles_dropped(self, mocker, tmp_db):
         outcome = claude_search.SearchOutcome(
             articles=[

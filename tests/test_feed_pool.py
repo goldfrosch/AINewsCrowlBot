@@ -66,6 +66,12 @@ class TestCollect:
         result = feed_pool.collect(5, exclude_urls={"https://hn/dup"})
         assert [a.url for a in result] == ["https://hn/new"]
 
+    def test_excludes_known_urls_by_canonical_form(self, mocker):
+        """피드 링크의 추적 파라미터·후행 슬래시 때문에 이미 저장한 글을 새 후보로 뽑던 문제."""
+        _patch_producers(mocker, hn=[_article("https://hn/dup/?utm_source=rss"), _article("https://hn/new")])
+        result = feed_pool.collect(5, exclude_urls={"https://hn/dup"})
+        assert [a.url for a in result] == ["https://hn/new"]
+
     def test_drops_stale_candidates(self, mocker):
         _patch_producers(mocker, hn=[_article("https://hn/old", age_days=40), _article("https://hn/fresh")])
         result = feed_pool.collect(5, max_age_days=7)

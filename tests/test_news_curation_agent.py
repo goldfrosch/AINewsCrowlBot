@@ -187,6 +187,29 @@ def test_prompt_lists_recent_posted_urls(monkeypatch, tmp_db):
     assert "https://example.com/posted-yesterday" in prompt
 
 
+def test_prompt_lists_reservoir_urls(monkeypatch, tmp_db):
+    """저수지 URL이 빠져 있으면 모델이 전날 찾아 둔 글을 다시 추천해 새 후보 몫이 줄었다."""
+    import database as db
+
+    db.upsert_article(
+        {
+            "url": "https://example.com/pending-yesterday",
+            "title": "Pending",
+            "source": "S",
+            "description": "",
+            "author": "",
+            "image_url": "",
+            "published_at": "",
+            "platform_score": 100.0,
+            "keywords": [],
+        }
+    )
+
+    prompt = _base_prompt(monkeypatch)
+
+    assert "https://example.com/pending-yesterday" in prompt
+
+
 def test_retry_round_asks_for_different_queries(monkeypatch):
     prompt = _base_prompt(monkeypatch, round_index=1)
 

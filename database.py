@@ -420,6 +420,13 @@ def get_recent_posted_urls(days: int = EXCLUDE_URL_LOOKBACK_DAYS) -> list[str]:
     return [r["url"] for r in rows]
 
 
+def get_pending_urls() -> list[str]:
+    """저수지(pending) URL을 최근 수집순으로 반환한다. 탐색 프롬프트의 제외 목록용."""
+    with _db() as conn:
+        rows = conn.execute("SELECT url FROM articles WHERE status = 'pending' ORDER BY crawled_at DESC").fetchall()
+    return [r["url"] for r in rows]
+
+
 # 편집 심사(editorial_review.apply_decisions)가 description 끝에 남기는 원문 제목 표식.
 _ORIGINAL_TITLE_PREFIX = "원문 제목:"
 

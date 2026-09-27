@@ -160,6 +160,30 @@ class TestRunCurationPipeline:
         assert result["raw_count"] == 2
         assert result["new_count"] == 1  # only the new one
 
+    def test_url_variant_of_stored_article_is_not_verified_again(self, mocker, tmp_db, sample_articles):
+        """정규형이 같으면 이미 저장한 글이다. 예전에는 본문 검증·유료 심사를 다시 거친 뒤에야 버려졌다."""
+        from database import upsert_article
+
+        upsert_article(sample_articles[0])
+        _patch_research(
+            mocker,
+            [
+                _article(sample_articles[0]["url"] + "/?utm_source=rss", "Same article"),
+                _article("https://example.com/new-one", "New Article"),
+            ],
+        )
+        mocker.patch("pipeline.load_preference_profile", return_value=None)
+        mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
+
+        import pipeline
+
+        result = pipeline.run_curation_pipeline(count=5)
+
+        verify = pipeline.article_quality.verify_articles
+        verified = [article.url for call in verify.call_args_list for article in call.args[0]]
+        assert verified == ["https://example.com/new-one"]
+        assert result["new_count"] == 1
+
     def test_articles_are_ranked(self, mocker, tmp_db):
         """결과 기사가 final_score 기준 내림차순이어야 함."""
         mock_articles = [

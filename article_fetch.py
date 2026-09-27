@@ -67,6 +67,19 @@ def request_url(url: str) -> str:
     return _normalize(url, strip_trailing_slash=False)
 
 
+def dedup_key(url: str) -> str:
+    """중복 판정 키. 저장 키(`canonicalize_url`)와 같은 정규형이다.
+
+    모델·피드가 준 원본 URL(후행 슬래시·추적 파라미터 포함)을 저장된 정규형과 문자열 그대로
+    비교하면, 이미 저장한 글을 알아보지 못하고 본문 검증과 유료 심사를 다시 태운다.
+    정규화할 수 없는 URL은 원문을 키로 쓴다 — 하류 fetch가 `bad_url`로 걸러낸다.
+    """
+    try:
+        return canonicalize_url(url)
+    except ValueError:
+        return url.strip()
+
+
 def _domain_matches(host: str, domains: set[str]) -> bool:
     return any(host == domain or host.endswith(f".{domain}") for domain in domains)
 

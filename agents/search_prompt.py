@@ -203,11 +203,11 @@ def build_search_prompt(
 
 
 def _excluded_urls(already_collected: set[str]) -> list[str]:
-    """게시 이력 + 이번 실행에서 수집한 URL을 최근순으로 잘라 반환한다.
+    """이번 실행에서 수집한 URL → 저수지(pending) → 게시 이력 순으로 잘라 반환한다.
 
     기존에는 `get_todays_posted_urls()`를 썼는데 브리핑 시각(06:00)에는
-    항상 빈 배열이라 중복 회피가 전혀 동작하지 않았다.
+    항상 빈 배열이라 중복 회피가 전혀 동작하지 않았다. 저수지 URL도 빠져 있어서
+    모델이 전날 찾아 둔 글을 다시 추천했고, 그만큼 새 후보 몫이 줄었다.
     """
-    posted = db.get_recent_posted_urls()
-    ordered = list(already_collected) + [url for url in posted if url not in already_collected]
-    return ordered[:EXCLUDE_URL_PROMPT_LIMIT]
+    ordered = [*already_collected, *db.get_pending_urls(), *db.get_recent_posted_urls()]
+    return list(dict.fromkeys(ordered))[:EXCLUDE_URL_PROMPT_LIMIT]
