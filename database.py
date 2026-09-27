@@ -420,13 +420,29 @@ def get_recent_posted_urls(days: int = EXCLUDE_URL_LOOKBACK_DAYS) -> list[str]:
     return [r["url"] for r in rows]
 
 
+# 편집 심사(editorial_review.apply_decisions)가 description 끝에 남기는 원문 제목 표식.
+_ORIGINAL_TITLE_PREFIX = "원문 제목:"
+
+
+def _original_title(description: str | None) -> str:
+    for line in (description or "").splitlines():
+        if line.startswith(_ORIGINAL_TITLE_PREFIX):
+            return line.removeprefix(_ORIGINAL_TITLE_PREFIX).strip()
+    return ""
+
+
 def get_recent_posted_titles(days: int = EXCLUDE_URL_LOOKBACK_DAYS) -> list[str]:
-    """최근 게시 제목을 최신순으로 반환해 주제 근중복 검증에 사용한다."""
+    """최근 게시 제목을 최신순으로 반환해 주제 근중복 검증에 사용한다.
+
+    저장 제목은 편집 심사가 쓴 한국어 제목(title_ko)이라, 원문(대개 영어) 제목을 가진
+    후보와 비교하면 같은 글이어도 겹치는 토큰이 거의 없어 근중복이 걸리지 않았다.
+    description에 함께 저장된 원문 제목도 돌려줘 같은 언어끼리 비교되게 한다.
+    """
     lookback = max(int(days), 0)
     with _db() as conn:
         rows = conn.execute(
             """
-            SELECT title FROM articles
+            SELECT title, description FROM articles
             WHERE status = 'posted'
               AND posted_at IS NOT NULL
               AND date(posted_at) >= date('now', '+9 hours', ?)
@@ -434,7 +450,13 @@ def get_recent_posted_titles(days: int = EXCLUDE_URL_LOOKBACK_DAYS) -> list[str]
             """,
             (f"-{lookback} days",),
         ).fetchall()
-    return [r["title"] for r in rows]
+    titles: list[str] = []
+    for row in rows:
+        titles.append(row["title"])
+        original = _original_title(row["description"])
+        if original and original != row["title"]:
+            titles.append(original)
+    return titles
 
 
 def get_all_article_urls() -> set[str]:

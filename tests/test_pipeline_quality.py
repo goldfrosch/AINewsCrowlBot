@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from article_quality import VerifiedArticle
 from crawlers.base import Article
 from tests.conftest import days_ago
@@ -88,6 +90,39 @@ def test_pipeline_publishes_only_reviewed_articles_and_caps_at_two(mocker, tmp_d
     import database as db
 
     assert db.get_all_article_urls() == {raw_articles[0].url, raw_articles[1].url}
+
+
+def test_posted_korean_brief_still_blocks_its_english_near_duplicate(mocker, tmp_db) -> None:
+    """저장 제목은 한국어(title_ko)라 영어 후보와 비교하면 근중복이 걸리지 않았다.
+
+    심사가 description에 남긴 원문 제목까지 비교해야 같은 주제의 재게시와 재심사를 막는다.
+    """
+    import database as db
+    import pipeline
+    from editorial_review import apply_decisions, parse_review_decisions
+
+    posted = _raw("https://example.com/posted", "Claude Code hooks, skills and subagents for production workflows")
+    decision = {
+        "url": posted.url,
+        "verdict": "KEEP",
+        "quality_score": 90,
+        "title_ko": "프로덕션 워크플로를 위한 클로드 코드 훅·스킬·서브에이전트",
+        "summary_ko": "훅과 스킬, 서브에이전트를 조합해 작업 흐름을 만드는 방법을 설명합니다.",
+        "why_it_matters_ko": "바로 적용할 수 있는 구성 예시가 있습니다.",
+        "content_type": "ai_programming",
+    }
+    brief = apply_decisions([_verified(posted)], parse_review_decisions(json.dumps([decision], ensure_ascii=False)))[0]
+    db.upsert_article(brief.to_dict())
+    db.mark_as_posted(db.get_pending_articles()[0]["id"], "msg-1", "chan-1")
+
+    candidate = _raw("https://other.example/guide", "Production Claude Code workflow with hooks, subagents, and skills")
+    _setup(mocker, [candidate], [])
+
+    pipeline.run_curation_pipeline(count=1)
+
+    review = pipeline.editorial_review.review_articles
+    assert review.call_args_list
+    assert all(call.args[0] == [] for call in review.call_args_list)
 
 
 def test_unreviewed_pending_article_is_not_selected(mocker, tmp_db) -> None:
