@@ -13,6 +13,7 @@ Discord 봇 본체
 
 import asyncio
 import datetime
+import math
 from zoneinfo import ZoneInfo
 
 import discord
@@ -28,6 +29,7 @@ from config import (
     DAILY_POST_HOUR,
     DISCORD_CHANNEL_ID,
     MORE_ARTICLES_MAX,
+    MORE_COOLDOWN_SECONDS,
     PREFERENCE_ANALYSIS_HOUR,
     REVIEW_MODEL,
     SEARCH_MODEL,
@@ -284,7 +286,25 @@ async def daily_brief():
 # ─── 핵심 리서치+게시 로직 ────────────────────────────────────────────────────
 
 
+# 큐레이션은 한 번에 하나만 돈다. 06:00 브리핑과 !more·!crawl이 겹치면 같은 pending 기사를
+# 두 번 게시하고 검색·심사 비용도 두 번 나간다.
+_curation_lock = asyncio.Lock()
+
+
 async def _research_and_post(
+    channel: discord.TextChannel,
+    count: int = ARTICLES_PER_POST,
+    is_daily: bool = False,
+) -> None:
+    """수동 요청은 진행 중인 실행이 있으면 돌려보내고, 정기 브리핑은 끝날 때까지 기다렸다가 돈다."""
+    if _curation_lock.locked() and not is_daily:
+        await channel.send("⏳ 이미 큐레이션이 진행 중입니다. 끝난 뒤에 다시 요청해 주세요.")
+        return
+    async with _curation_lock:
+        await _curate_and_post(channel, count=count, is_daily=is_daily)
+
+
+async def _curate_and_post(
     channel: discord.TextChannel,
     count: int = ARTICLES_PER_POST,
     is_daily: bool = False,
@@ -350,10 +370,23 @@ def is_admin_or_allowed():
 
 
 @bot.command(name="more")
+@commands.cooldown(1, MORE_COOLDOWN_SECONDS, commands.BucketType.guild)
 async def cmd_more(ctx: commands.Context, count: int = ARTICLES_PER_POST):
     """추가 기사를 가져옵니다. 예: !more 2"""
     count = max(1, min(count, MORE_ARTICLES_MAX))
     await _research_and_post(ctx.channel, count=count, is_daily=False)
+
+
+@cmd_more.error
+async def cmd_more_error(ctx: commands.Context, error: commands.CommandError) -> None:
+    """쿨다운이면 남은 시간을 알려 주고, 나머지 오류는 로그로 남긴다."""
+    if isinstance(error, commands.CommandOnCooldown):
+        minutes = max(1, math.ceil(error.retry_after / 60))
+        await ctx.send(
+            f"⏳ `!more`는 {MORE_COOLDOWN_SECONDS // 60}분에 한 번만 쓸 수 있습니다. {minutes}분 뒤에 다시 시도해 주세요."
+        )
+        return
+    print(f"[!more] 명령 오류: {error!r}")
 
 
 @bot.command(name="crawl")
