@@ -9,6 +9,8 @@ agents/news_curation_agent.run() — 필라 병렬 검색 + 수량 보장 루프
 
 import threading
 
+import pytest
+
 import claude_search
 import database as db
 from agents import news_curation_agent as agent
@@ -41,7 +43,7 @@ def _round(*urls, age_days: int = 1):
     return [_outcome(*urls, age_days=age_days), *[_outcome() for _ in range(PILLARS - 1)]]
 
 
-def _run(mocker, outcomes, target_count=3):
+def _run(mocker, outcomes, target_count=3, **kwargs):
     """outcomes를 순서대로 돌려주고, 소진되면 빈 결과를 계속 반환한다."""
     mocker.patch.object(agent, "ANTHROPIC_API_KEY", "test-key")
     mocker.patch("anthropic.Anthropic", return_value=mocker.MagicMock())
@@ -54,7 +56,7 @@ def _run(mocker, outcomes, target_count=3):
             return queue.pop(0) if queue else _outcome()
 
     search = mocker.patch.object(claude_search, "search_articles", side_effect=next_outcome)
-    articles = agent.run(target_count=target_count)
+    articles = agent.run(target_count=target_count, **kwargs)
     return articles, search
 
 
@@ -225,3 +227,53 @@ class TestFiltering:
         """필라를 잃으면 하류에서 기사별 신선도 창을 복원할 수 없다."""
         articles, _ = _run(mocker, _round("https://a/1"))
         assert articles[0]["pillar"] in agent._plan_pillars(None)
+
+
+class TestSearchSession:
+    """완화 패스는 같은 세션으로 run()을 다시 부른다. 앞 패스를 그대로 반복하면 안 된다."""
+
+    @staticmethod
+    def _first_pass(mocker, session):
+        _run(mocker, _round(*[f"https://a/{i}" for i in range(40)]), session=session, max_age_days=14)
+
+    def test_only_pillars_with_widened_window_are_searched_again(self, mocker, tmp_db):
+        session = agent.SearchSession()
+        self._first_pass(mocker, session)
+
+        _, search = _run(mocker, [], session=session, max_age_days=30)
+
+        callers = {call.kwargs["caller"] for call in search.call_args_list}
+        assert callers
+        assert all("ai_practice" in caller for caller in callers)
+
+    def test_round_numbers_continue_across_passes(self, mocker, tmp_db):
+        """라운드가 0으로 돌아가면 토픽 회전과 재시도 문구가 사라져 1패스 쿼리가 반복된다."""
+        session = agent.SearchSession()
+        self._first_pass(mocker, session)
+
+        _, search = _run(mocker, [], session=session, max_age_days=30)
+
+        assert all("RETRY ROUND" in prompt for prompt in _prompts(search))
+
+    def test_no_search_when_no_window_widened(self, mocker, tmp_db):
+        session = agent.SearchSession()
+        self._first_pass(mocker, session)
+
+        articles, search = _run(mocker, [], session=session, max_age_days=14)
+
+        assert articles == []
+        search.assert_not_called()
+
+    def test_urls_already_sent_to_review_are_not_collected_again(self, mocker, tmp_db):
+        session = agent.SearchSession(seen_urls={"https://a/seen"})
+
+        articles, _ = _run(mocker, _round("https://a/seen/", "https://a/new"), session=session)
+
+        assert [a["url"] for a in articles] == ["https://a/new"]
+
+    def test_all_failed_searches_raise_so_caller_can_fall_back(self, mocker, tmp_db):
+        """전부 오류인데 빈 목록을 돌려주면 '새 글 없음'과 구분되지 않아 폴백 기회가 사라진다."""
+        failures = [claude_search.SearchOutcome(error="529: overloaded") for _ in range(PILLARS * 2)]
+
+        with pytest.raises(RuntimeError):
+            _run(mocker, failures)

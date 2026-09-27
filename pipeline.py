@@ -158,11 +158,28 @@ def _merge_stage_report(stages: dict, verify: dict, review: dict, dup_removed: i
         verify_reasons[reason] = verify_reasons.get(reason, 0) + count
 
 
-def _review_candidates(articles, max_age_days: int, recent_titles: list[str], stages: dict, relax_level: int = 0):
+def _review_candidates(
+    articles,
+    max_age_days: int,
+    recent_titles: list[str],
+    stages: dict,
+    relax_level: int = 0,
+    *,
+    seen: set[str] | None = None,
+    held: list | None = None,
+):
+    """본문 검증 → 근중복 제거 → 편집 심사를 거친 게시 가능 기사를 돌려준다.
+
+    `seen`을 넘기면 이번 실행에서 이미 심사로 넘긴 URL은 다시 받지 않고, 새로 넘기는 URL을
+    거기에 기록한다. `held`를 넘기면 점수 컷에만 걸린 판정이 쌓여, 다음 완화 단계에서
+    재검색·재심사 없이 다시 판정된다.
+    """
     # 이미 저장한 글은 정규형 URL로 먼저 뺀다. 원본 URL(후행 슬래시·추적 파라미터)을 저장된
     # 정규형과 문자열 그대로 비교하던 때는 저장한 글이 본문 검증과 유료 심사를 다시 거친 뒤
     # 저장 단계의 UNIQUE 제약에서야 버려졌다(시뮬레이션: 심사 후보의 최대 절반).
     known = {dedup_key(url) for url in db.get_all_article_urls()}
+    if seen is not None:
+        known |= seen
     fresh = []
     for article in articles:
         key = dedup_key(article.url)
@@ -177,15 +194,21 @@ def _review_candidates(articles, max_age_days: int, recent_titles: list[str], st
         lambda article: _article_window(article, max_age_days),
         report=verify_report,
     )
+    if seen is not None:
+        # 본문 검증을 통과해 심사로 넘어가는 URL만 기록한다. 검증 탈락(특히 페이지 날짜가
+        # 창 밖인 stale)은 창이 넓어진 다음 패스에서 다시 볼 수 있어야 하고, 재fetch는 무료다.
+        seen.update(dedup_key(candidate.article.url) for candidate in verified)
     unique = article_quality.remove_near_duplicates(verified, recent_titles)
     review_report: dict = {}
-    reviewed = editorial_review.review_articles(unique, report=review_report, relax_level=relax_level)
+    reviewed = editorial_review.review_articles(unique, report=review_report, relax_level=relax_level, held=held)
     duplicates = len(articles) - len(fresh) + len(verified) - len(unique)
     _merge_stage_report(stages, verify_report, review_report, duplicates)
     return reviewed
 
 
-def _topup_from_feeds(shortfall: int, max_age_days: int, stages: dict, relax_level: int = 0) -> tuple[int, int]:
+def _topup_from_feeds(
+    shortfall: int, max_age_days: int, stages: dict, relax_level: int = 0, seen: set[str] | None = None
+) -> tuple[int, int]:
     """HN/RSS 후보도 본문 검증과 편집 심사를 거쳐 부족분을 채운다.
 
     부족분의 4배를 받는 이유: feed 후보도 본문검증·편집심사 수율이 웹 검색 후보와
@@ -196,7 +219,9 @@ def _topup_from_feeds(shortfall: int, max_age_days: int, stages: dict, relax_lev
 
     known = db.get_all_article_urls()
     candidates = feed_pool.collect(shortfall * 4, exclude_urls=known, max_age_days=max_age_days)
-    reviewed = _review_candidates(candidates, max_age_days, db.get_recent_posted_titles(), stages, relax_level)
+    reviewed = _review_candidates(
+        candidates, max_age_days, db.get_recent_posted_titles(), stages, relax_level, seen=seen
+    )
     reviewed.sort(key=lambda article: article.platform_score, reverse=True)
     inserted = _store(reviewed[:shortfall])
     quality_dropped = len(candidates) - len(reviewed)
@@ -230,7 +255,7 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
     if pref_profile:
         print(f"[Pipeline] 선호도 프로파일 로드 — {pref_profile.get('summary', '')}")
 
-    from agents.news_curation_agent import get_topic_keys
+    from agents.news_curation_agent import SearchSession, get_topic_keys
 
     intent = load_curation_intent(valid_topics=get_topic_keys())
     if intent.get("active"):
@@ -263,6 +288,11 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
     intent_locked = bool(intent and intent.get("active") and intent.get("recency_hours"))
     windows = [base_max_age] * len(RECENCY_RELAXATION_DAYS) if intent_locked else list(RECENCY_RELAXATION_DAYS)
 
+    # 완화 패스 사이에 이어지는 탐색 상태와, 점수 컷에만 걸린 심사 판정.
+    # 패스마다 처음부터 다시 검색·심사하면 1패스를 그대로 반복해 비용만 늘었다.
+    session = SearchSession()
+    held: list = []
+
     for level, window in enumerate(windows):
         if len(final) >= target_count:
             break
@@ -274,6 +304,28 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
             f"현재 {len(final)}/{target_count}개"
         )
 
+        # 앞 패스 심사분 중 점수 컷에만 걸렸던 후보를 완화된 컷으로 먼저 다시 판정한다 (API 호출 없음).
+        promoted = editorial_review.promote_held(held, level)
+        if promoted:
+            totals["new"] += _store(promoted)
+            totals["quality_dropped"] -= len(promoted)
+            stages["review_kept"] += len(promoted)
+            stages["review_rejected"] -= len(promoted)
+            print(f"[Pipeline] 앞 패스 심사분 {len(promoted)}개가 완화된 품질컷을 통과 (재검색·재심사 없음)")
+            final = _select(target_count, max_age_days)
+            if len(final) >= target_count:
+                stages["passes"].append(
+                    {
+                        "level": level,
+                        "max_age_days": max_age_days,
+                        "raw": 0,
+                        "reviewed": 0,
+                        "new": 0,
+                        "promoted": len(promoted),
+                    }
+                )
+                break
+
         shortfall = target_count - len(final)
         try:
             raw_articles = curator.research(
@@ -282,6 +334,7 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
                 pref_profile or {},
                 intent=intent,
                 max_age_days=max_age_days,
+                session=session,
             )
         except claude_search.FatalSearchError as e:
             # 크레딧 소진·인증 실패는 완화해도 결과가 같다. 남은 패스를 포기하고
@@ -300,7 +353,13 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
         ]
         stale_dropped = len(raw_articles) - len(fresh_articles)
         reviewed = _review_candidates(
-            fresh_articles, max_age_days, db.get_recent_posted_titles(), stages, relax_level=level
+            fresh_articles,
+            max_age_days,
+            db.get_recent_posted_titles(),
+            stages,
+            relax_level=level,
+            seen=session.seen_urls,
+            held=held,
         )
         new_count = _store(reviewed)
 
@@ -316,6 +375,7 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
                 "raw": len(raw_articles),
                 "reviewed": len(reviewed),
                 "new": new_count,
+                "promoted": len(promoted),
             }
         )
         print(
@@ -330,7 +390,7 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
     if len(final) < target_count and not fatal_api_error:
         relax_level = len(RECENCY_RELAXATION_DAYS) - 1
         feed_topup, feed_quality_dropped = _topup_from_feeds(
-            target_count - len(final), max_age_days, stages, relax_level
+            target_count - len(final), max_age_days, stages, relax_level, seen=session.seen_urls
         )
         totals["quality_dropped"] += feed_quality_dropped
         totals["new"] += feed_topup

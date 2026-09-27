@@ -39,6 +39,9 @@ _RELAXATION_THRESHOLDS: Final = (
     (58.0, 64.0),
     (55.0, 60.0),
 )
+# 심사 프롬프트가 KEEP의 최저선으로 쓰는 점수. 가장 완화된 컷과 같아서, 한 번 받은 판정을
+# 완화 단계마다 재심사 없이 다시 적용할 수 있다(단계별 컷은 코드가 적용한다).
+_KEEP_FLOOR: Final = min(min(cuts) for cuts in _RELAXATION_THRESHOLDS)
 # 필라마다 다른 산출물을 내므로 분류도 필라를 따라간다. 기존 2종만 허용하면
 # "구독할 만한 피드"나 "무료 3D 도구 비교" 같은 정당한 결과가 분류 부적합으로 전량 탈락한다.
 _CONTENT_TYPES: Final = {
@@ -164,6 +167,23 @@ def _reject_reason(decision: EditorialDecision | None, threshold: float) -> str:
     return "한국어 필드 누락"
 
 
+def _decision_for(candidate: VerifiedArticle, by_url: dict[str, EditorialDecision]) -> EditorialDecision | None:
+    return by_url.get(candidate.canonical_url) or by_url.get(candidate.article.url)
+
+
+def _passes(candidate: VerifiedArticle, decision: EditorialDecision | None, relax_level: int) -> bool:
+    """이 완화 단계의 컷으로 게시할 수 있는 판정인지."""
+    trusted_cut, unknown_cut = thresholds(relax_level)
+    threshold = trusted_cut if candidate.trusted_source else unknown_cut
+    return (
+        decision is not None
+        and decision.verdict == "KEEP"
+        and decision.quality_score >= threshold
+        and decision.content_type in _CONTENT_TYPES
+        and all(_has_hangul(value) for value in (decision.title_ko, decision.summary_ko, decision.why_it_matters_ko))
+    )
+
+
 def apply_decisions(
     candidates: list[VerifiedArticle],
     decisions: list[EditorialDecision],
@@ -179,18 +199,10 @@ def apply_decisions(
     by_url = {decision.url: decision for decision in decisions}
     approved: list[Article] = []
     for candidate in candidates:
-        decision = by_url.get(candidate.canonical_url) or by_url.get(candidate.article.url)
-        threshold = trusted_cut if candidate.trusted_source else unknown_cut
-        if (
-            decision is None
-            or decision.verdict != "KEEP"
-            or decision.quality_score < threshold
-            or decision.content_type not in _CONTENT_TYPES
-            or not all(
-                _has_hangul(value) for value in (decision.title_ko, decision.summary_ko, decision.why_it_matters_ko)
-            )
-        ):
+        decision = _decision_for(candidate, by_url)
+        if not _passes(candidate, decision, relax_level):
             if reasons is not None:
+                threshold = trusted_cut if candidate.trusted_source else unknown_cut
                 reasons.append(_reject_reason(decision, threshold))
             continue
         description = (
@@ -214,15 +226,17 @@ def apply_decisions(
     return approved
 
 
-def _scoring_rubric(relax_level: int = 0) -> str:
+def _scoring_rubric() -> str:
     """quality_score의 의미를 못 박는 루브릭.
 
     이 블록이 없으면 모델은 자기 임의 스케일로 점수를 매기고, 코드의 임계값과
     체계적으로 어긋난다. 실측에서 모델이 KEEP으로 판정한 78점·70점 아티클이
-    코드 컷(82)에 걸려 전부 폐기됐다. 임계값을 문자열로 직접 주입해
-    상수와 프롬프트가 따로 노는 것을 막는다.
+    코드 컷(82)에 걸려 전부 폐기됐다. KEEP 최저선을 상수에서 직접 주입해
+    상수와 프롬프트가 따로 놀지 않게 한다.
+
+    단계별 컷을 프롬프트에 넣지 않는 이유: 판정이 완화 단계와 무관해야 앞 패스에서
+    받은 판정을 재심사 없이 완화된 컷에 다시 적용할 수 있다.
     """
-    trusted_cut, unknown_cut = thresholds(relax_level)
     return (
         "SCORING — quality_score is 0-100 on THIS scale, not your own:\n"
         "- 85-100: reproducible end-to-end workflow with commands/code/settings AND measured results "
@@ -232,9 +246,11 @@ def _scoring_rubric(relax_level: int = 0) -> str:
         "- 50-69: accurate but shallow — concept overview, feature summary, or a list with no "
         "executable detail.\n"
         "- 0-49: news, marketing, paywalled stub, academic paper, or nothing actionable.\n"
-        f"KEEP requires quality_score >= {unknown_cut:.0f}, or "
-        f'>= {trusted_cut:.0f} when the candidate has "trusted_source": true. '
-        "Below that, use REJECT and explain why in rejection_reason.\n"
+        f"KEEP any candidate that fits this reader and one content type with quality_score >= {_KEEP_FLOOR:.0f}. "
+        "Use REJECT below that, or for news, marketing, papers, and off-topic pages, and explain why in "
+        "rejection_reason. The pipeline applies a stricter cut per source and may relax it later by reusing "
+        "your decision without asking again, so score honestly on the scale above and fill the Korean fields "
+        "for every KEEP.\n"
         "Score every candidate INDEPENDENTLY on its own merits. Near-duplicates are removed before "
         "this step, so never lower a score or REJECT a candidate because another candidate covers a "
         "similar topic."
@@ -257,7 +273,7 @@ _CONTENT_TYPE_GUIDE: Final = (
 )
 
 
-def _review_prompt(candidates: list[VerifiedArticle], relax_level: int = 0) -> str:
+def _review_prompt(candidates: list[VerifiedArticle]) -> str:
     payload = [
         {
             "url": candidate.canonical_url,
@@ -287,7 +303,7 @@ def _review_prompt(candidates: list[VerifiedArticle], relax_level: int = 0) -> s
         "content with no concrete steps or evidence. Treat Unreal, Unity, and Godot equally. Produce "
         "natural Korean editorial fields for every KEEP decision. Do not invent URLs or facts. "
         "Return one decision per input URL as JSON only.\n\n"
-        f"{_CONTENT_TYPE_GUIDE}\n\n{_scoring_rubric(relax_level)}\n\n"
+        f"{_CONTENT_TYPE_GUIDE}\n\n{_scoring_rubric()}\n\n"
         f"OUTPUT: {schema}\n\nCANDIDATES:\n{json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -333,9 +349,9 @@ def _request_review(client, prompt: str, max_tokens: int, caller: str):
     return response
 
 
-def _review_batch(client, batch: list[VerifiedArticle], relax_level: int, label: str) -> list[EditorialDecision]:
+def _review_batch(client, batch: list[VerifiedArticle], label: str) -> list[EditorialDecision]:
     """배치 1개를 심사해 결정 목록을 반환한다. 실패·절단이면 빈 목록."""
-    prompt = _review_prompt(batch, relax_level)
+    prompt = _review_prompt(batch)
     response = _request_review(client, prompt, REVIEW_MAX_TOKENS, f"editorial_review_{label}")
     if response is not None and response.stop_reason == "max_tokens":
         print(f"[EditorialReview] {label}: 응답이 잘렸습니다 (max_tokens={REVIEW_MAX_TOKENS}) — 2배로 재시도")
@@ -352,6 +368,7 @@ def review_articles(
     candidates: list[VerifiedArticle],
     report: dict | None = None,
     relax_level: int = 0,
+    held: list[tuple[VerifiedArticle, EditorialDecision]] | None = None,
 ) -> list[Article]:
     """Review candidates in parallel batches and return approved Korean briefs.
 
@@ -360,6 +377,8 @@ def review_articles(
     나머지는 살아남고, 병렬 실행이라 벽시계 시간도 늘지 않는다.
 
     `report`를 넘기면 심사 통계(후보 수·통과 수·탈락 사유별 건수)가 채워진다.
+    `held`를 넘기면 점수 컷에만 걸린 판정이 쌓인다. 파이프라인은 다음 완화 단계에서
+    `promote_held()`로 이 판정을 재검색·재심사 없이 다시 적용한다.
     """
     if not candidates or not ANTHROPIC_API_KEY:
         if report is not None:
@@ -372,7 +391,7 @@ def review_articles(
 
     def work(indexed: tuple[int, list[VerifiedArticle]]) -> list[EditorialDecision]:
         index, batch = indexed
-        return _review_batch(client, batch, relax_level, f"b{index}")
+        return _review_batch(client, batch, f"b{index}")
 
     if len(batches) == 1:
         decision_groups = [work((0, batches[0]))]
@@ -384,8 +403,37 @@ def review_articles(
     decisions = [decision for group in decision_groups for decision in group]
     reasons: list[str] = []
     approved = apply_decisions(candidates, decisions, reasons, relax_level)
+    if held is not None:
+        held.extend(_held_for_relaxation(candidates, decisions, relax_level))
     if report is not None:
         report["candidates"] = len(candidates)
         report["kept"] = len(approved)
         report["reasons"] = dict(Counter(reasons).most_common(5))
     return approved
+
+
+def _held_for_relaxation(
+    candidates: list[VerifiedArticle], decisions: list[EditorialDecision], relax_level: int
+) -> list[tuple[VerifiedArticle, EditorialDecision]]:
+    """지금 컷에는 못 미치지만 가장 완화된 컷은 넘는 판정. 내용 때문에 떨어진 후보는 담지 않는다."""
+    loosest = len(_RELAXATION_THRESHOLDS) - 1
+    by_url = {decision.url: decision for decision in decisions}
+    pairs: list[tuple[VerifiedArticle, EditorialDecision]] = []
+    for candidate in candidates:
+        decision = _decision_for(candidate, by_url)
+        if decision is None or _passes(candidate, decision, relax_level):
+            continue
+        if _passes(candidate, decision, loosest):
+            pairs.append((candidate, decision))
+    return pairs
+
+
+def promote_held(held: list[tuple[VerifiedArticle, EditorialDecision]], relax_level: int) -> list[Article]:
+    """보류해 둔 판정을 완화된 컷으로 다시 적용한다. 통과분은 `held`에서 빠진다 (API 호출 없음)."""
+    ready = [(candidate, decision) for candidate, decision in held if _passes(candidate, decision, relax_level)]
+    if not ready:
+        return []
+    held[:] = [(candidate, decision) for candidate, decision in held if not _passes(candidate, decision, relax_level)]
+    return apply_decisions(
+        [candidate for candidate, _ in ready], [decision for _, decision in ready], relax_level=relax_level
+    )

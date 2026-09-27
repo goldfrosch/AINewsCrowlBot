@@ -13,6 +13,7 @@ import pipeline
 from article_quality import VerifiedArticle
 from config import CONTENT_TYPE_MAX_AGE_DAYS, MAX_PER_SOURCE_IN_POST, RECENCY_RELAXATION_DAYS
 from crawlers.base import Article
+from editorial_review import EditorialDecision
 from tests.conftest import days_ago
 
 _INACTIVE_INTENT = {"active": False, "recency_hours": None}
@@ -42,27 +43,29 @@ def stub_gates(mocker):
             for a in kept
         ]
 
-    def review(candidates, report=None, relax_level=0):
-        # platform_score를 품질 점수로 간주하고 완화 단계의 임계값을 적용한다.
-        trusted_cut, _unknown = pipeline.editorial_review.thresholds(relax_level)
-        kept = [c for c in candidates if c.article.platform_score >= trusted_cut]
-        if report is not None:
-            report.update({"candidates": len(candidates), "kept": len(kept), "reasons": {}})
+    def review_batch(_client, batch, _label):
+        # 모델 판정 대신 platform_score를 품질 점수로 쓴다. 단계별 컷·보류 판정·재판정은 진짜 코드가 한다.
         return [
-            Article(
+            EditorialDecision(
                 url=c.canonical_url,
-                title=c.article.title,
-                source=c.article.source,
-                description=c.article.description,
-                published_at=c.published_at,
-                platform_score=c.article.platform_score,
-                keywords=[*c.article.keywords, "ai_programming"],
+                verdict="KEEP",
+                quality_score=c.article.platform_score,
+                title_ko=f"한국어 제목 {c.article.title}",
+                summary_ko="한국어 요약입니다.",
+                why_it_matters_ko="한국어 근거입니다.",
+                content_type="ai_programming",
+                engines=(),
+                game_client_relevance=0.0,
+                keywords=(),
+                rejection_reason="",
             )
-            for c in kept
+            for c in batch
         ]
 
     mocker.patch("pipeline.article_quality.verify_articles", side_effect=verify)
-    mocker.patch("pipeline.editorial_review.review_articles", side_effect=review)
+    mocker.patch("pipeline.editorial_review._review_batch", side_effect=review_batch)
+    mocker.patch("pipeline.editorial_review.ANTHROPIC_API_KEY", "test-key")
+    mocker.patch("pipeline.editorial_review.anthropic.Anthropic")
     mocker.patch("pipeline.load_preference_profile", return_value=None)
     mocker.patch("pipeline.load_curation_intent", return_value=_INACTIVE_INTENT)
 
@@ -94,13 +97,63 @@ class TestRelaxationLoop:
         assert result["max_age_days"] >= RECENCY_RELAXATION_DAYS[1]
 
     def test_second_pass_lowers_quality_threshold(self, mocker, tmp_db):
-        """1패스 컷(62)에 걸린 60점 기사를 완화 단계가 통과시킨다."""
+        """1패스 컷(62)에 걸린 60점 기사를 완화 단계가 통과시킨다 — 재검색·재심사 없이."""
         candidate = [_article("https://a/mid", score=60.0)]
-        mocker.patch("pipeline.curator.research", side_effect=[list(candidate), list(candidate), list(candidate)])
+        research = mocker.patch(
+            "pipeline.curator.research", side_effect=[list(candidate), list(candidate), list(candidate)]
+        )
 
         result = pipeline.run_curation_pipeline(count=1)
 
         assert [a["url"] for a in result["articles"]] == ["https://a/mid"]
+        assert research.call_count == 1
+        assert pipeline.editorial_review._review_batch.call_count == 1
+
+    def test_candidate_is_reviewed_once_per_run(self, mocker, tmp_db):
+        """앞 패스가 심사한 URL을 다음 패스가 다시 받아 와도 재심사하지 않는다."""
+        low = _article("https://a/low", score=40.0)  # 가장 완화된 컷(55)도 못 넘는다
+        mocker.patch("pipeline.curator.research", side_effect=[[low], [low], [low]])
+
+        pipeline.run_curation_pipeline(count=1)
+
+        batches = pipeline.editorial_review._review_batch.call_args_list
+        assert [c.canonical_url for call in batches for c in call.args[1]] == ["https://a/low"]
+
+    def test_page_dated_stale_candidate_is_reconsidered_when_window_widens(self, mocker, tmp_db):
+        """본문 검증에서 창 밖으로 떨어진 글은 심사를 받지 않았다. 창이 넓어진 패스에서 다시 봐야 한다."""
+        undated = _article("https://a/page-dated")
+        undated.published_at = ""  # 모델은 날짜를 모르지만 페이지에는 25일 전 날짜가 있다
+
+        def verify(articles, max_age_days, report=None):
+            kept = [a for a in articles if max_age_days(a) >= 25]
+            return [
+                VerifiedArticle(
+                    article=a,
+                    canonical_url=a.url,
+                    language="en",
+                    published_at=days_ago(25),
+                    excerpt="details " * 200,
+                    trusted_source=True,
+                )
+                for a in kept
+            ]
+
+        mocker.patch("pipeline.article_quality.verify_articles", side_effect=verify)
+        mocker.patch("pipeline.curator.research", side_effect=[[undated], [undated], []])
+
+        result = pipeline.run_curation_pipeline(count=1)
+
+        assert [a["url"] for a in result["articles"]] == ["https://a/page-dated"]
+
+    def test_passes_share_one_search_session(self, mocker, tmp_db):
+        """세션이 이어져야 창이 그대로인 필라를 건너뛰고 라운드 번호도 이어진다."""
+        research = mocker.patch("pipeline.curator.research", side_effect=[[], [], []])
+
+        pipeline.run_curation_pipeline(count=2)
+
+        sessions = [call.kwargs["session"] for call in research.call_args_list]
+        assert len(sessions) == len(RECENCY_RELAXATION_DAYS)
+        assert all(session is sessions[0] for session in sessions)
 
     def test_stops_as_soon_as_target_met(self, mocker, tmp_db):
         research = mocker.patch(

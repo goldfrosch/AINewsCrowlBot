@@ -86,9 +86,10 @@ def main():
     for reason, count in sorted((stages.get("reason_counts") or {}).items(), key=lambda item: item[1], reverse=True):
         print(f"      [심사 탈락] {reason[:70]} ({count}건)")
     for entry in stages.get("passes") or []:
+        promoted = f" · 앞 패스 재판정 {entry['promoted']}" if entry.get("promoted") else ""
         print(
             f"      [패스 {entry['level'] + 1}] 창 {entry['max_age_days']}일 · "
-            f"수집 {entry['raw']} → 심사통과 {entry['reviewed']} → 신규 {entry['new']}"
+            f"수집 {entry['raw']} → 심사통과 {entry['reviewed']} → 신규 {entry['new']}{promoted}"
         )
     print(f"  - DB 신규 저장: {result['new_count']}개")
     print(f"  - 랭킹 후 게시 대상: {len(result['articles'])}개")

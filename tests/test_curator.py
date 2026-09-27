@@ -157,6 +157,16 @@ class TestResearch:
         assert len(result) == 1
         assert result[0].title == "Agent Result"
 
+    def test_empty_agent_result_does_not_fall_back(self, mocker):
+        """빈 결과는 실패가 아니다(새 후보 없음, 창이 그대로라 검색 생략). 폴백은 같은 주제를 또 사 올 뿐이다."""
+        mocker.patch("agents.news_curation_agent.run", return_value=[])
+        fallback = mocker.patch("curator._fallback_research")
+
+        from curator import research
+
+        assert research(count=3) == []
+        fallback.assert_not_called()
+
     def test_fallback_on_agent_failure(self, mocker):
         result, _, _ = self._run_fallback(mocker, {})
         assert len(result) == 1

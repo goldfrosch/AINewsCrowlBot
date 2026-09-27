@@ -109,15 +109,18 @@ def test_string_quality_score_is_parsed_as_number() -> None:
     assert len(apply_decisions([_verified(trusted=False)], decisions)) == 1
 
 
-def test_review_prompt_declares_scoring_scale_and_thresholds() -> None:
-    """루브릭 없이 0-100만 요구하면 모델의 임의 스케일과 코드 임계값이 어긋난다."""
-    from editorial_review import _QUALITY_THRESHOLD, _UNKNOWN_SOURCE_THRESHOLD, _review_prompt
+def test_review_prompt_declares_scoring_scale_and_keep_floor() -> None:
+    """루브릭 없이 0-100만 요구하면 모델의 임의 스케일과 코드 임계값이 어긋난다.
+
+    단계별 컷 대신 KEEP 최저선(가장 완화된 컷)을 준다 — 판정이 완화 단계와 무관해야
+    앞 패스의 판정을 재심사 없이 다시 쓸 수 있다.
+    """
+    from editorial_review import _KEEP_FLOOR, _review_prompt
 
     prompt = _review_prompt([_verified(trusted=False)])
 
     assert "SCORING" in prompt
-    assert f">= {_UNKNOWN_SOURCE_THRESHOLD:.0f}" in prompt
-    assert f">= {_QUALITY_THRESHOLD:.0f}" in prompt
+    assert f">= {_KEEP_FLOOR:.0f}" in prompt
     # 근중복 제거는 remove_near_duplicates가 이미 했으므로 심사에서 또 깎으면 이중 페널티다.
     assert "INDEPENDENTLY" in prompt
 
@@ -370,3 +373,33 @@ def test_review_articles_fills_report_with_rejection_reasons(mocker) -> None:
         "kept": 1,
         "reasons": {"광고성 홍보 페이지입니다": 1},
     }
+
+
+def test_score_only_rejection_is_held_and_promoted_when_cut_relaxes(mocker) -> None:
+    """점수 컷에만 걸린 판정은 보관했다가 완화 단계에서 재심사 없이 통과시킨다."""
+    from editorial_review import promote_held
+
+    client = _stream_client(mocker, _message(_response(score=62)))
+    mocker.patch("editorial_review.token_tracker.log_token_usage")
+    held: list = []
+
+    assert review_articles([_verified(trusted=False)], held=held) == []  # 미지 소스 1단계 컷 70
+    assert len(held) == 1
+    assert promote_held(held, 1) == []  # 2단계 컷 64
+    promoted = promote_held(held, 2)  # 3단계 컷 60
+    assert [article.url for article in promoted] == ["https://unknown.example/game-assets"]
+    assert held == []
+    assert client.messages.stream.call_count == 1
+
+
+def test_content_rejection_is_not_held(mocker) -> None:
+    """내용 때문에 REJECT된 후보는 컷을 낮춰도 살아나면 안 된다."""
+    payload = json.loads(_response(score=90))
+    payload[0]["verdict"] = "REJECT"
+    payload[0]["rejection_reason"] = "보도자료입니다"
+    _stream_client(mocker, _message(json.dumps(payload, ensure_ascii=False)))
+    mocker.patch("editorial_review.token_tracker.log_token_usage")
+    held: list = []
+
+    assert review_articles([_verified(trusted=False)], held=held) == []
+    assert held == []

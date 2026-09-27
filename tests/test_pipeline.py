@@ -46,7 +46,7 @@ def pass_quality_gate(mocker):
             for article in articles
         ]
 
-    def review(candidates, report=None, relax_level=0):
+    def review(candidates, report=None, relax_level=0, held=None):
         if report is not None:
             report["candidates"] = len(candidates)
             report["kept"] = len(candidates)

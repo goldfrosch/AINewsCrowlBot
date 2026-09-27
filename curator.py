@@ -289,16 +289,18 @@ def research(
     preferences: dict | None = None,
     intent: dict | None = None,
     max_age_days: int | None = None,
+    session=None,
 ) -> list[Article]:
     """
     뉴스 큐레이션 에이전트로 개발자용 AI 아티클을 수집합니다.
-    에이전트 실패 시 단순 웹 검색으로 폴백합니다.
+    에이전트가 실패(예외)했을 때만 단순 웹 검색으로 폴백합니다.
 
     Args:
         count:        수집할 기사 수
         exclude_urls: 이미 게시된 URL 목록 (에이전트가 DB에서 직접 조회하므로 폴백 전용)
         preferences:  DB 소스/키워드 선호도 (에이전트에 external_preferences로 전달)
         intent:       큐레이션 의도 (에이전트 및 폴백에 전달)
+        session:      완화 패스 사이에 이어지는 탐색 상태 (agents.news_curation_agent.SearchSession)
 
     Returns:
         Article 리스트 (len ≤ count)
@@ -314,12 +316,8 @@ def research(
             external_preferences=preferences or {},
             intent=intent,
             max_age_days=max_age_days,
+            session=session,
         )
-        if raw:
-            articles = _to_articles(raw)
-            print(f"[Curator] 에이전트 완료: {len(articles)}개 선정")
-            return articles
-        print("[Curator] 에이전트 결과 없음 — 폴백 실행")
     except claude_search.FatalSearchError:
         # 폴백도 같은 키로 같은 API를 부른다. 한 번 더 실패시켜 봐야 로그만 늘어난다.
         print("[Curator] 복구 불가 API 오류 — 폴백을 건너뜁니다.")
@@ -329,6 +327,13 @@ def research(
 
         print(f"[Curator] 에이전트 실패 — 폴백 실행: {e}")
         traceback.print_exc()
+    else:
+        # 빈 결과는 실패가 아니다 — 새 후보가 없었거나 창이 그대로라 검색을 생략한 것이다.
+        # 여기서 폴백하면 같은 주제를 한 번 더 사 올 뿐이라, 폴백은 에이전트가 실패했을 때만
+        # 쓴다(에이전트는 검색이 전부 오류로 끝나면 예외를 던진다).
+        articles = _to_articles(raw)
+        print(f"[Curator] 에이전트 완료: {len(articles)}개 선정")
+        return articles
 
     if not ANTHROPIC_API_KEY and not _is_mocked(anthropic.Anthropic):
         raise ValueError("ANTHROPIC_API_KEY가 .env에 설정되어 있지 않습니다.")

@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 
 import anthropic
 
@@ -53,7 +54,7 @@ from config import (
     TOPUP_MAX_ROUNDS,
 )
 
-__all__ = ["FatalSearchError", "build_search_prompt", "get_topic_keys", "run"]
+__all__ = ["FatalSearchError", "SearchSession", "build_search_prompt", "get_topic_keys", "run"]
 
 # 예외의 본거지는 claude_search다. 여기서는 호출부 편의를 위해 재노출만 한다.
 FatalSearchError = claude_search.FatalSearchError
@@ -237,6 +238,22 @@ def _plan_pillars(topics: list[str] | None) -> dict[str, list[str]]:
     return {key: value for key, value in plan.items() if value}
 
 
+@dataclass
+class SearchSession:
+    """완화 패스 사이에 이어지는 탐색 상태.
+
+    패스마다 run()을 새로 시작하면 라운드 번호가 0으로 돌아가고 수집 이력도 비어서,
+    신선도 창이 그대로인 필라는 앞 패스와 같은 프롬프트로 같은 결과를 다시 사 왔다.
+    """
+
+    # 이번 실행에서 심사 단계로 넘어간 URL(정규형). 파이프라인이 채운다.
+    seen_urls: set[str] = field(default_factory=set)
+    # 필라별로 마지막에 검색한 신선도 창
+    windows: dict[str, int] = field(default_factory=dict)
+    # 다음 검색 라운드 번호. 토픽 회전과 재시도 문구가 이 값을 따른다.
+    next_round: int = 0
+
+
 def _absorb(
     articles: list[dict],
     collected: dict[str, dict],
@@ -262,6 +279,7 @@ def run(
     external_preferences: dict | None = None,
     intent: dict | None = None,
     max_age_days: int | None = None,
+    session: SearchSession | None = None,
 ) -> list[dict]:
     """
     뉴스 큐레이션 에이전트를 실행한다.
@@ -276,29 +294,47 @@ def run(
     Args:
         max_age_days: 상위 완화 루프가 넘기는 전역 상한. 지정하면 필라별
                       신선도와 비교해 더 넓은 쪽을 쓴다.
+        session:      완화 패스 사이에 이어지는 탐색 상태. 같은 세션으로 다시 부르면
+                      신선도 창이 넓어진 필라만 검색하고, 라운드 번호(토픽 회전)를
+                      이어 가며, 앞 패스가 이미 심사로 넘긴 URL은 다시 받지 않는다.
 
     Returns:
         선별된 기사 딕셔너리 목록 (최신순)
+
+    Raises:
+        FatalSearchError: 크레딧 소진·인증 실패처럼 재시도가 무의미한 오류
+        RuntimeError:     실행한 검색이 전부 오류로 끝났을 때 (상위가 폴백하도록)
     """
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY가 .env에 설정되지 않았습니다.")
 
+    session = session if session is not None else SearchSession()
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     intent_age = recency.max_age_from_intent(intent)
-    plan = _plan_pillars(topics)
-    if not plan:
-        plan = {"": list(topics or DEFAULT_TOPICS)}
-    want = _overfetch_target(target_count)
-    quota = _split_by_weight(want, list(plan))
-    # 톱업은 라운드당 필라 수만큼 호출이 더 나간다(실측 약 $1). 이미 목표를 채우고도
-    # 남을 후보를 확보했으면 돌리지 않는다.
-    sufficient = min(want, max(target_count, round(target_count * CANDIDATES_PER_PUBLISHED)))
 
     def window_for(pillar: str) -> int:
         """필라 신선도. 의도(intent)가 더 좁으면 의도를 따르고, 완화 루프가 더 넓으면 그쪽을 쓴다."""
         base = pillar_max_age_days(pillar, intent_age) if pillar else intent_age
         window = min(base, intent_age) if intent and intent.get("active") else base
         return max(window, max_age_days) if max_age_days else window
+
+    plan = _plan_pillars(topics) or {"": list(topics or DEFAULT_TOPICS)}
+    # 앞 패스와 창이 같으면 프롬프트도 같아서 같은 결과를 다시 사 온다.
+    # 신선도 창이 실제로 넓어진 필라만 다시 검색한다.
+    unchanged = [key for key in plan if session.windows.get(key) == window_for(key)]
+    if unchanged:
+        labels = ", ".join(pillar_label(key) if key else "전체" for key in unchanged)
+        print(f"[Agent] 신선도 창이 그대로라 재검색 생략 — {labels}")
+        plan = {key: value for key, value in plan.items() if key not in unchanged}
+    if not plan:
+        return []
+    session.windows.update({key: window_for(key) for key in plan})
+
+    want = _overfetch_target(target_count)
+    quota = _split_by_weight(want, list(plan))
+    # 톱업은 라운드당 필라 수만큼 호출이 더 나간다(실측 약 $1). 이미 목표를 채우고도
+    # 남을 후보를 확보했으면 돌리지 않는다.
+    sufficient = min(want, max(target_count, round(target_count * CANDIDATES_PER_PUBLISHED)))
 
     summary = " / ".join(f"{pillar_label(key)} {quota.get(key, 0)}건({window_for(key)}일)" for key in plan)
     print(f"[Agent] 시작 — 목표 {target_count}개 (요청 {want}개) · {summary}")
@@ -307,23 +343,31 @@ def run(
     print(f"[Agent] 선호도 분석 → {preferences['summary']}")
 
     # 저장 키(정규형)로 비교해야 후행 슬래시·추적 파라미터만 다른 같은 글을 알아본다.
-    known_urls = {dedup_key(url) for url in db.get_all_article_urls()}
+    # 앞 패스가 이미 심사로 넘긴 URL도 뺀다 — 그 판정은 파이프라인이 보관해 다시 쓴다.
+    known_urls = {dedup_key(url) for url in db.get_all_article_urls()} | session.seen_urls
     collected: dict[str, dict] = {}
     dropped = {"duplicate": 0, "stale": 0}
+    errors: list[str] = []
+    searched = 0
 
-    for round_index in range(1 + TOPUP_MAX_ROUNDS):
-        if round_index and len(collected) >= sufficient:
+    for attempt in range(1 + TOPUP_MAX_ROUNDS):
+        if attempt and len(collected) >= sufficient:
             print(f"[Agent] 톱업 생략 — 후보 {len(collected)}개 ≥ 충분 기준 {sufficient}개")
             break
 
+        # 라운드 번호는 패스를 넘어 이어진다. 0으로 되돌리면 토픽 회전과 재시도 문구가
+        # 사라져 1패스와 같은 쿼리가 다시 나간다.
+        round_index = session.next_round
+        session.next_round += 1
         pending = list(plan)
+        exclude = session.seen_urls | set(collected)
 
-        def search(pillar: str, _round: int = round_index) -> tuple[str, dict]:
+        def search(pillar: str, _round: int = round_index, _exclude: set[str] = exclude) -> tuple[str, dict]:
             return pillar, _tool_find_ai_articles(
                 client,
                 topics_for_round(plan[pillar], _round),
                 quota.get(pillar, max(2, target_count)),
-                set(collected),
+                _exclude,
                 preferences=preferences,
                 intent=intent,
                 max_age_days=window_for(pillar),
@@ -335,6 +379,8 @@ def run(
         with ThreadPoolExecutor(max_workers=workers) as pool:
             outcomes = list(pool.map(search, pending))
 
+        searched += len(outcomes)
+        errors += [result["error"] for _pillar, result in outcomes if result.get("error")]
         fatal = next((result["error"] for _pillar, result in outcomes if result.get("fatal")), None)
         for pillar, result in outcomes:
             before = len(collected)
@@ -354,6 +400,10 @@ def run(
             # 상위로 올려 보내 파이프라인이 남은 완화 패스까지 낭비하지 않게 한다.
             print("[Agent] 복구 불가 API 오류 — 추가 검색을 중단합니다.")
             raise claude_search.FatalSearchError(fatal)
+
+    if searched and len(errors) == searched:
+        # 전부 오류면 '찾았는데 새 글이 없다'가 아니라 실패다. 상위(curator)가 폴백하도록 올린다.
+        raise RuntimeError(f"필라 검색 {searched}회가 모두 실패했습니다: {errors[-1]}")
 
     articles = sorted(collected.values(), key=lambda a: a["published_at"], reverse=True)
     if len(articles) < target_count:
