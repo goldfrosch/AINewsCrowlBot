@@ -155,17 +155,34 @@ def _metadata_date(soup: BeautifulSoup) -> date | None:
     time_tag = soup.find("time", attrs={"datetime": True})
     if time_tag:
         return recency.parse_published_date(time_tag.get("datetime"))
+    return None
+
+
+def _json_ld_nodes(data: object) -> list[dict]:
+    """JSON-LD 최상위 값을 노드 목록으로 편다. Yoast 등 WordPress 플러그인은 노드를 `@graph` 하나에 묶는다."""
+    items = data if isinstance(data, list) else [data]
+    nodes: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        nodes.append(item)
+        graph = item.get("@graph")
+        if isinstance(graph, list):
+            nodes.extend(node for node in graph if isinstance(node, dict))
+    return nodes
+
+
+def _json_ld_date(soup: BeautifulSoup) -> date | None:
+    """JSON-LD의 datePublished. `_visible_text`가 <script>를 지우기 전에 읽어야 한다."""
     for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
         try:
             data = json.loads(script.string or "")
         except (json.JSONDecodeError, TypeError):
             continue
-        queue = data if isinstance(data, list) else [data]
-        for item in queue:
-            if isinstance(item, dict):
-                parsed = recency.parse_published_date(item.get("datePublished"))
-                if parsed:
-                    return parsed
+        for node in _json_ld_nodes(data):
+            parsed = recency.parse_published_date(node.get("datePublished"))
+            if parsed:
+                return parsed
     return None
 
 
@@ -194,13 +211,16 @@ def verify_html_detailed(article: Article, html: str, max_age_days: int) -> tupl
     if not supported_article_url(canonical_url):
         return None, "unsupported_url"
     soup = BeautifulSoup(html, "html.parser")
+    # `_visible_text`가 <script>를 전부 지우므로 JSON-LD 발행일은 그 전에 읽어 둔다.
+    # 순서가 뒤집혀 있던 동안 JSON-LD에만 날짜가 있는 글은 발행일 미상으로 신선도 검사를 통과했다.
+    json_ld_date = _json_ld_date(soup)
     text = _visible_text(soup)
     if len(text) < _MIN_ARTICLE_CHARS:
         return None, "body_too_short"
     language = _language(soup, text)
     if language is None:
         return None, "language_rejected"
-    page_date = _metadata_date(soup)
+    page_date = _metadata_date(soup) or json_ld_date
     path_date = _url_date(canonical_url)
     verified_dates = [value for value in (page_date, path_date) if value]
     if any(recency.is_stale(value, max_age_days=max_age_days) for value in verified_dates):

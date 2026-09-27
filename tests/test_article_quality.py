@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from article_quality import canonicalize_url, is_near_duplicate, verify_articles, verify_html
+from article_quality import canonicalize_url, is_near_duplicate, verify_articles, verify_html, verify_html_detailed
 from crawlers.base import Article
 from tests.conftest import days_ago
 
@@ -88,6 +90,40 @@ def test_verify_html_rejects_stale_page_date_despite_fresh_claim() -> None:
     result = verify_html(article, _html(language="en", published_at=days_ago(30), body=body), 7)
 
     assert result is None
+
+
+def _json_ld_html(json_ld: dict, body: str) -> str:
+    return (
+        '<html lang="en"><head>'
+        f'<script type="application/ld+json">{json.dumps(json_ld)}</script>'
+        f"</head><body><article>{body}</article></body></html>"
+    )
+
+
+def test_verify_html_rejects_stale_page_dated_only_in_json_ld() -> None:
+    """<script>를 지운 뒤에 JSON-LD를 찾던 버그로, JSON-LD에만 날짜가 있는 옛 글이 신선도를 통과했다."""
+    article = _article("https://example.com/old-guide")
+    article.published_at = ""
+    body = "A practical programming tutorial with implementation details and code examples. " * 30
+    html = _json_ld_html({"@type": "BlogPosting", "datePublished": days_ago(200)}, body)
+
+    candidate, gate = verify_html_detailed(article, html, 14)
+
+    assert candidate is None
+    assert gate == "stale"
+
+
+def test_verify_html_reads_date_from_json_ld_graph() -> None:
+    """Yoast 등 WordPress 플러그인은 노드를 `@graph` 하나에 묶는다."""
+    article = _article("https://example.com/fresh-guide")
+    article.published_at = ""
+    body = "A practical programming tutorial with implementation details and code examples. " * 30
+    graph = {"@graph": [{"@type": "WebSite"}, {"@type": "Article", "datePublished": days_ago(2)}]}
+
+    result = verify_html(article, _json_ld_html(graph, body), 14)
+
+    assert result is not None
+    assert result.published_at == days_ago(2)
 
 
 def test_canonicalize_url_removes_tracking_and_fragment() -> None:
