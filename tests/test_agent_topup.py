@@ -8,16 +8,27 @@ agents/news_curation_agent.run() — 필라 병렬 검색 + 수량 보장 루프
 """
 
 import threading
+from collections import Counter
+from datetime import date
 
 import pytest
 
 import claude_search
 import database as db
 from agents import news_curation_agent as agent
-from config import OVERFETCH_MAX, OVERFETCH_MIN, SEARCH_HARVEST_TARGET, TOPUP_MAX_ROUNDS
+from config import OVERFETCH_MAX, OVERFETCH_MIN, SEARCH_HARVEST_TARGET
 from tests.conftest import days_ago
 
 PILLARS = len(agent._plan_pillars(None))
+# 아래 테스트 대부분은 필라 동시 검색과 톱업 라운드의 동작을 검증한다. 운영 기본값(하루 한 필라,
+# 톱업 없음)과 별개로 설정으로 켤 수 있는 기능이라 여기서 켜 둔다.
+TOPUP_ROUNDS = 1
+
+
+@pytest.fixture(autouse=True)
+def fan_out_with_topup(mocker):
+    mocker.patch.object(agent, "PILLARS_PER_RUN", PILLARS)
+    mocker.patch.object(agent, "TOPUP_MAX_ROUNDS", TOPUP_ROUNDS)
 
 
 def _outcome(*urls, age_days: int = 1):
@@ -121,18 +132,18 @@ class TestTopupLoop:
     def test_retries_when_short(self, mocker, tmp_db):
         articles, search = _run(mocker, [*_round("https://a/1"), *_round("https://a/2")])
         assert {a["url"] for a in articles} == {"https://a/1", "https://a/2"}
-        assert search.call_count == PILLARS * (1 + TOPUP_MAX_ROUNDS)
+        assert search.call_count == PILLARS * (1 + TOPUP_ROUNDS)
 
     def test_empty_first_round_still_retries(self, mocker, tmp_db):
         """예전에는 첫 검색이 빈손이면 그대로 0건이었다."""
         articles, search = _run(mocker, [*_round(), *_round("https://a/1", "https://a/2", "https://a/3")])
         assert len(articles) == 3
-        assert search.call_count == PILLARS * (1 + TOPUP_MAX_ROUNDS)
+        assert search.call_count == PILLARS * (1 + TOPUP_ROUNDS)
 
     def test_all_rounds_empty_returns_empty(self, mocker, tmp_db):
         articles, search = _run(mocker, [*_round(), *_round()])
         assert articles == []
-        assert search.call_count == PILLARS * (1 + TOPUP_MAX_ROUNDS)
+        assert search.call_count == PILLARS * (1 + TOPUP_ROUNDS)
 
     def test_should_stop_skips_topup_round(self, mocker, tmp_db):
         """실행당 비용 상한·배치 마감에 걸리면 후보가 모자라도 톱업 라운드를 시작하지 않는다."""
@@ -292,3 +303,29 @@ class TestSearchSession:
 
         with pytest.raises(RuntimeError):
             _run(mocker, failures)
+
+
+class TestDailyRotation:
+    """필라마다 호출을 나누면 검색 비용이 필라 수만큼 곱해진다. 운영 기본값은 하루 한 필라다."""
+
+    def test_rotation_follows_pillar_weights(self):
+        pillars = list(agent._plan_pillars(None))
+        assert Counter(agent._rotation(pillars)) == {key: agent.pillar_weight(key) for key in pillars}
+
+    def test_each_day_searches_one_pillar_and_all_pillars_get_turns(self):
+        plan = agent._plan_pillars(None)
+        start = date(2026, 10, 1).toordinal()
+        picks = [list(agent._todays_pillars(plan, 1, date.fromordinal(start + offset))) for offset in range(10)]
+        assert all(len(pick) == 1 for pick in picks)
+        assert {pick[0] for pick in picks} == set(plan)
+
+    def test_default_run_makes_one_search_call(self, mocker, tmp_db):
+        mocker.patch.object(agent, "PILLARS_PER_RUN", 1)
+        _, search = _run(mocker, _round(*[f"https://x/{i}" for i in range(40)]))
+        assert search.call_count == 1
+
+    def test_explicit_topics_still_search_their_pillars(self, mocker, tmp_db):
+        mocker.patch.object(agent, "PILLARS_PER_RUN", 1)
+        topics = [agent.pillar_topics(key)[0] for key in agent._plan_pillars(None)]
+        _, search = _run(mocker, _round(*[f"https://x/{i}" for i in range(40)]), topics=topics)
+        assert search.call_count == PILLARS

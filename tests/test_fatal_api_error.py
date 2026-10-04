@@ -69,6 +69,7 @@ class TestFatalDetection:
 class TestAgentCircuitBreaker:
     def test_agent_stops_after_fatal_error(self, mocker, tmp_db) -> None:
         mocker.patch.object(agent, "ANTHROPIC_API_KEY", "test-key")
+        mocker.patch.object(agent, "TOPUP_MAX_ROUNDS", 1)
         mocker.patch("anthropic.Anthropic", return_value=mocker.MagicMock())
         calls: list[str] = []
         lock = threading.Lock()
@@ -83,8 +84,8 @@ class TestAgentCircuitBreaker:
         with pytest.raises(claude_search.FatalSearchError):
             agent.run(target_count=3)
 
-        # 첫 라운드(필라 수만큼)에서 멈춰야 한다 — 톱업 라운드는 돌지 않는다.
-        assert len(calls) == len(agent._plan_pillars(None))
+        # 첫 라운드에서 멈춰야 한다 — 톱업 라운드는 돌지 않는다.
+        assert len(calls) == min(agent.PILLARS_PER_RUN, len(agent._plan_pillars(None)))
 
 
 class TestPipelineCircuitBreaker:

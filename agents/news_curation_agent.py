@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import date
 
 import anthropic
 
@@ -52,6 +53,7 @@ from config import (
     OVERFETCH_MIN,
     OVERFETCH_MULTIPLIER,
     PILLAR_SEARCH_WORKERS,
+    PILLARS_PER_RUN,
     SEARCH_HARVEST_TARGET,
     TOPUP_MAX_ROUNDS,
 )
@@ -240,6 +242,35 @@ def _plan_pillars(topics: list[str] | None) -> dict[str, list[str]]:
     return {key: value for key, value in plan.items() if value}
 
 
+def _rotation(pillars: list[str]) -> list[str]:
+    """가중치 비율대로 섞어 도는 순서(smooth weighted round-robin). 5:3:2면 10일 주기다."""
+    weights = {key: pillar_weight(key) for key in pillars}
+    total = sum(weights.values())
+    credit = dict.fromkeys(pillars, 0)
+    order: list[str] = []
+    for _ in range(total):
+        for key in pillars:
+            credit[key] += weights[key]
+        chosen = max(pillars, key=credit.__getitem__)
+        credit[chosen] -= total
+        order.append(chosen)
+    return order
+
+
+def _todays_pillars(plan: dict[str, list[str]], count: int, day: date) -> dict[str, list[str]]:
+    """그날 검색할 필라만 남긴다. 날짜로 정해지므로 같은 날의 완화 패스·재실행은 같은 필라를 본다."""
+    order = _rotation(list(plan))
+    start = day.toordinal() % len(order)
+    chosen: list[str] = []
+    for offset in range(len(order)):
+        key = order[(start + offset) % len(order)]
+        if key not in chosen:
+            chosen.append(key)
+        if len(chosen) >= count:
+            break
+    return {key: plan[key] for key in chosen}
+
+
 @dataclass
 class SearchSession:
     """완화 패스 사이에 이어지는 탐색 상태.
@@ -324,6 +355,10 @@ def run(
         return max(window, max_age_days) if max_age_days else window
 
     plan = _plan_pillars(topics) or {"": list(topics or DEFAULT_TOPICS)}
+    if not topics and len(plan) > PILLARS_PER_RUN:
+        # 필라마다 호출을 나누면 검색 비용이 필라 수만큼 곱해진다. 하루에 PILLARS_PER_RUN개만 검색하고
+        # 가중치 순서로 날마다 돌린다. 나머지 필라의 몫은 저수지와 다음 날 검색이 채운다.
+        plan = _todays_pillars(plan, PILLARS_PER_RUN, recency.today())
     # 앞 패스와 창이 같으면 프롬프트도 같아서 같은 결과를 다시 사 온다.
     # 신선도 창이 실제로 넓어진 필라만 다시 검색한다.
     unchanged = [key for key in plan if session.windows.get(key) == window_for(key)]
