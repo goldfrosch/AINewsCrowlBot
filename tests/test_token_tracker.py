@@ -46,6 +46,33 @@ def test_unknown_model_falls_back_to_most_expensive() -> None:
     assert token_tracker.estimate_cost("claude-future-9", 1_000_000, 0) == pytest.approx(5.0)
 
 
+def test_haiku_is_priced() -> None:
+    """탐색 기본 모델이 단가표에 없으면 가장 비싼 단가로 잡혀 비용이 5배로 과대 보고된다."""
+    assert token_tracker.model_pricing("claude-haiku-4-5") == (1.0, 5.0)
+
+
+def test_batch_halves_token_cost_but_not_search_fee() -> None:
+    """Message Batches는 토큰만 50%다. 웹 검색 수수료($10/1k)는 그대로 청구된다."""
+    sync = token_tracker.estimate_cost("claude-sonnet-5", 1_000_000, 0, web_search_requests=10)
+    batch = token_tracker.estimate_cost("claude-sonnet-5", 1_000_000, 0, web_search_requests=10, batch=True)
+    assert sync == pytest.approx(2.1)
+    assert batch == pytest.approx(1.1)
+
+
+def test_batch_calls_are_labeled_and_discounted() -> None:
+    """`!tokens`에서 배치 호출을 구분할 수 있어야 절감 효과를 확인할 수 있다."""
+    token_tracker.log_api_usage(
+        _Usage(input_tokens=1_000_000, output_tokens=0),
+        caller="editorial_review_b0",
+        model="claude-sonnet-5",
+        batch=True,
+    )
+
+    callers = token_tracker.get_today_token_stats()["callers"]
+    assert [c["caller"] for c in callers] == ["editorial_review_b0_batch"]
+    assert callers[0]["cost"] == pytest.approx(1.0)
+
+
 def test_log_api_usage_records_cache_and_search_fields() -> None:
     usage = _Usage(
         input_tokens=1_000,

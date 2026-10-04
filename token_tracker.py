@@ -26,6 +26,7 @@ MODEL_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-opus-5": (5.0, 25.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-sonnet-5": (2.0, 10.0),
+    "claude-haiku-4-5": (1.0, 5.0),
 }
 # 모르는 모델은 과소평가보다 과대평가가 안전하므로 가장 비싼 단가를 쓴다.
 _FALLBACK_PRICING: tuple[float, float] = (5.0, 25.0)
@@ -35,6 +36,8 @@ _CACHE_WRITE_MULTIPLIER = 1.25
 _CACHE_READ_MULTIPLIER = 0.1
 # web_search: $10 / 1,000 searches
 _WEB_SEARCH_USD_PER_CALL = 0.01
+# Message Batches: 토큰은 전부 50%이고 웹 검색 수수료는 동기 호출과 같다.
+_BATCH_TOKEN_MULTIPLIER = 0.5
 
 
 def set_token_db_path(path: Path | str) -> None:
@@ -114,8 +117,9 @@ def estimate_cost(
     cache_creation_tokens: int = 0,
     cache_read_tokens: int = 0,
     web_search_requests: int = 0,
+    batch: bool = False,
 ) -> float:
-    """호출 1회의 달러 비용 추정치."""
+    """호출 1회의 달러 비용 추정치. 배치 호출은 토큰만 반값이고 검색 수수료는 그대로다."""
     input_price, output_price = model_pricing(model)
     token_cost = (
         input_tokens * input_price
@@ -123,6 +127,8 @@ def estimate_cost(
         + cache_read_tokens * input_price * _CACHE_READ_MULTIPLIER
         + output_tokens * output_price
     ) / 1_000_000
+    if batch:
+        token_cost *= _BATCH_TOKEN_MULTIPLIER
     return round(token_cost + web_search_requests * _WEB_SEARCH_USD_PER_CALL, 6)
 
 
@@ -136,21 +142,25 @@ def _usage_int(source: object, name: str) -> int:
     return int(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0
 
 
-def log_api_usage(usage: object, caller: str, model: str, elapsed_seconds: float | None = None) -> None:
+def log_api_usage(
+    usage: object, caller: str, model: str, elapsed_seconds: float | None = None, batch: bool = False
+) -> None:
     """SDK usage 객체 하나로 토큰·캐시·서버툴 사용량과 비용을 기록한다.
 
     호출부가 `usage.input_tokens`만 꺼내 넘기면 캐시와 web_search 과금이
     통째로 누락된다. 추출 책임을 여기로 모아 두 호출 경로가 같은 필드를 보게 한다.
+    배치 호출은 반값으로 계산하고 caller에 `_batch`를 붙여 `!tokens`에서 구분되게 한다.
     """
     log_token_usage(
         _usage_int(usage, "input_tokens"),
         _usage_int(usage, "output_tokens"),
-        caller=caller,
+        caller=f"{caller}_batch" if batch else caller,
         elapsed_seconds=elapsed_seconds,
         cache_creation_tokens=_usage_int(usage, "cache_creation_input_tokens"),
         cache_read_tokens=_usage_int(usage, "cache_read_input_tokens"),
         web_search_requests=_usage_int(getattr(usage, "server_tool_use", None), "web_search_requests"),
         model=model,
+        batch=batch,
     )
 
 
@@ -163,6 +173,7 @@ def log_token_usage(
     cache_read_tokens: int = 0,
     web_search_requests: int = 0,
     model: str = "",
+    batch: bool = False,
 ) -> None:
     """API 호출 사용량을 DB에 기록한다.
 
@@ -178,6 +189,7 @@ def log_token_usage(
         cache_creation_tokens,
         cache_read_tokens,
         web_search_requests,
+        batch=batch,
     )
     with _db() as conn:
         conn.execute(

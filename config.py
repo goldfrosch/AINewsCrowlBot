@@ -43,6 +43,12 @@ LINKEDIN_LI_AT: str = os.getenv("LINKEDIN_LI_AT", "")
 TIMEZONE = "Asia/Seoul"
 PREFERENCE_ANALYSIS_HOUR = 2  # 새벽 2시 KST: 선호도 분석
 DAILY_POST_HOUR = 6  # 오전 6시 KST: 뉴스 브리핑
+# 브리핑 전에 Message Batches API로 검색·심사를 돌려 저수지를 채운다(토큰 단가 50%, 검색 수수료는 동일).
+# 배치는 대부분 1시간 안에 끝나지만 보장은 24시간이라, 브리핑 N분 전을 마감으로 둔다.
+# 마감을 넘기면 배치를 취소하고, 06:00 브리핑이 동기 호출로 부족분만 채운다.
+BATCH_PREPARE_HOUR = 3
+BATCH_DEADLINE_MARGIN_MINUTES = 15
+BATCH_POLL_SECONDS = 30
 
 # ── 게시 설정 ─────────────────────────────────────
 # 학습용 브리핑이므로 "적게 뽑아 자주 0건"보다 "넉넉히 뽑아 매일 읽을거리"가 목표다.

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 from types import SimpleNamespace
 
 import anthropic
 
+import claude_transport
 from article_quality import VerifiedArticle
 from config import CLAUDE_EFFORT, REVIEW_MAX_TOKENS
 from crawlers.base import Article
@@ -320,6 +322,19 @@ def test_review_articles_returns_empty_when_api_fails(mocker) -> None:
     mocker.patch("editorial_review.token_tracker.log_token_usage")
 
     assert review_articles([_verified(trusted=True)]) == []
+
+
+def test_review_falls_back_to_sync_when_batch_misses_deadline(mocker) -> None:
+    """심사는 싸다. 마감을 넘겼다고 버리면 이미 값을 치른 검색·본문 검증 결과까지 잃는다."""
+    client = _stream_client(mocker, _message(_response(score=92)))
+    mocker.patch("editorial_review.token_tracker.log_token_usage")
+
+    with claude_transport.batch_until(time.monotonic() - 1):
+        result = review_articles([_verified(trusted=True)])
+
+    assert len(result) == 1
+    client.messages.batches.create.assert_not_called()
+    assert client.messages.stream.call_count == 1
 
 
 def test_review_articles_fills_report_with_rejection_reasons(mocker) -> None:

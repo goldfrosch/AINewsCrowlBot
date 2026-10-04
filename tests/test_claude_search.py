@@ -1,10 +1,13 @@
 """claude_search.py — 공용 웹 검색 레이어의 안전장치"""
 
 import json
+import time
 
 import anthropic
+import pytest
 
 import claude_search
+import claude_transport
 import config
 
 _SYSTEM = [{"type": "text", "text": "sys"}]
@@ -52,12 +55,33 @@ class TestSearchArticles:
 
     def test_declares_thinking_budget_and_effort(self, mocker):
         """thinking이 max_tokens를 나눠 쓰므로 예산과 effort를 명시해야 잘리지 않는다."""
+        mocker.patch.object(claude_search, "SEARCH_MODEL", "claude-sonnet-5")
         client = _client(mocker, _response(mocker, _payload("https://a")))
         claude_search.search_articles(client, prompt="p", system_blocks=_SYSTEM, caller="t")
 
         kwargs = client.messages.stream.call_args_list[0].kwargs
         assert kwargs["max_tokens"] == config.SEARCH_MAX_TOKENS
         assert kwargs["output_config"] == {"effort": config.CLAUDE_EFFORT}
+
+    def test_haiku_search_omits_effort(self, mocker):
+        """Haiku 4.5는 effort 파라미터를 받지 않는다 — 보내면 검색이 전부 400으로 끝난다."""
+        mocker.patch.object(claude_search, "SEARCH_MODEL", "claude-haiku-4-5")
+        client = _client(mocker, _response(mocker, _payload("https://a")))
+        claude_search.search_articles(client, prompt="p", system_blocks=_SYSTEM, caller="t")
+
+        assert "output_config" not in client.messages.stream.call_args_list[0].kwargs
+
+    def test_passed_batch_deadline_is_raised_not_swallowed(self, mocker):
+        """오류로 삼키면 에이전트가 '검색 전부 실패'로 보고 폴백 검색을 한 번 더 산다."""
+        client = mocker.MagicMock()
+
+        with (
+            claude_transport.batch_until(time.monotonic() - 1),
+            pytest.raises(claude_transport.BatchDeadlineExceeded),
+        ):
+            claude_search.search_articles(client, prompt="p", system_blocks=_SYSTEM, caller="t")
+
+        client.messages.batches.create.assert_not_called()
 
     def test_joins_multiple_text_blocks(self, mocker):
         """JSON이 두 번째 text 블록에 있어도 찾아야 한다 (첫 블록만 보던 버그)."""

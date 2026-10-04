@@ -12,6 +12,7 @@ from unittest.mock import Mock
 import anthropic
 
 import claude_search
+import claude_transport
 import recency
 from config import ANTHROPIC_API_KEY, EXCLUDE_URL_PROMPT_LIMIT, WEB_SEARCH_MAX_USES
 from crawlers.base import Article
@@ -321,6 +322,9 @@ def research(
     except claude_search.FatalSearchError:
         # 폴백도 같은 키로 같은 API를 부른다. 한 번 더 실패시켜 봐야 로그만 늘어난다.
         print("[Curator] 복구 불가 API 오류 — 폴백을 건너뜁니다.")
+        raise
+    except claude_transport.BatchDeadlineExceeded:
+        # 마감을 넘긴 배치 준비 실행이다. 폴백 검색을 더 사지 않고 06:00 동기 실행에 맡긴다.
         raise
     except Exception as e:
         import traceback

@@ -12,6 +12,7 @@ from typing import Final
 
 import anthropic
 
+import claude_transport
 import token_tracker
 from agents.agent_spec import SKILL_REVIEWER
 from article_quality import VerifiedArticle
@@ -321,22 +322,30 @@ def _request_review(client, prompt: str, max_tokens: int, caller: str):
 
     스트리밍을 쓰는 이유: thinking이 기본 활성이 되면서 출력이 길어졌는데,
     비스트리밍 호출은 SDK가 max_tokens 약 21,300을 넘기면 ValueError를 던진다.
+
+    배치 모드에서 마감을 넘기면 동기로 다시 부른다. 심사는 배치당 몇 센트인데, 여기서 버리면
+    이미 값을 치른 검색·본문 검증 결과까지 잃는다.
     """
+    params = {
+        "model": REVIEW_MODEL,
+        "max_tokens": max_tokens,
+        "system": [{"type": "text", "text": SKILL_REVIEWER, "cache_control": {"type": "ephemeral"}}],
+        "messages": [{"role": "user", "content": prompt}],
+        **claude_transport.effort_params(REVIEW_MODEL, CLAUDE_EFFORT),
+    }
     started = time.perf_counter()
     try:
-        with client.messages.stream(
-            model=REVIEW_MODEL,
-            max_tokens=max_tokens,
-            output_config={"effort": CLAUDE_EFFORT},
-            system=[{"type": "text", "text": SKILL_REVIEWER, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            response = stream.get_final_message()
+        try:
+            response, batched = claude_transport.create_message(client, params)
+        except claude_transport.BatchDeadlineExceeded as late:
+            print(f"[EditorialReview] {caller}: {late} — 동기로 다시 심사합니다")
+            response, batched = claude_transport.create_message(client, params, allow_batch=False)
     except (
         anthropic.APIConnectionError,
         anthropic.APIStatusError,
         anthropic.AuthenticationError,
         anthropic.RateLimitError,
+        claude_transport.BatchRequestError,
     ) as error:
         print(f"[EditorialReview] 검수 실패로 후보를 게시하지 않습니다: {error}")
         return None
@@ -345,6 +354,7 @@ def _request_review(client, prompt: str, max_tokens: int, caller: str):
         caller=caller,
         model=REVIEW_MODEL,
         elapsed_seconds=round(time.perf_counter() - started, 2),
+        batch=batched,
     )
     return response
 

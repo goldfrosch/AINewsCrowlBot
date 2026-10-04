@@ -10,6 +10,7 @@ curator.py(폴백)와 agents/news_curation_agent.py(메인)에 거의 동일한
   - `stop_reason == "pause_turn"`  → assistant 콘텐츠를 되돌려주며 루프 이어받기
   - `RateLimitError`               → 30초 대기 후 1회 재시도
   - 모든 text 블록을 합쳐 JSON 배열 추출 (첫 블록만 보던 버그 제거)
+  - 배치 모드(`claude_transport.batch_until`)에서는 같은 요청을 Message Batches로 보낸다
 """
 
 import time
@@ -17,6 +18,7 @@ from dataclasses import dataclass, field
 
 import anthropic
 
+import claude_transport
 import token_tracker
 from config import (
     CLAUDE_EFFORT,
@@ -100,15 +102,18 @@ def _invoke(client, *, prompt: str, system_blocks, caller: str, max_tokens: int,
 
     for attempt in range(_PAUSE_TURN_MAX_CONTINUATIONS + 1):
         started = time.perf_counter()
-        with client.messages.stream(
-            model=SEARCH_MODEL,
-            max_tokens=max_tokens,
-            output_config={"effort": CLAUDE_EFFORT},
-            tools=[web_search_tool(max_uses)],
-            system=system_blocks,
-            messages=messages,
-        ) as stream:
-            response = stream.get_final_message()
+        response, batched = claude_transport.create_message(
+            client,
+            {
+                "model": SEARCH_MODEL,
+                "max_tokens": max_tokens,
+                "tools": [web_search_tool(max_uses)],
+                "system": system_blocks,
+                "messages": messages,
+                # Haiku 4.5는 effort를 받지 않는다(400). 지원하는 모델에만 붙는다.
+                **claude_transport.effort_params(SEARCH_MODEL, CLAUDE_EFFORT),
+            },
+        )
 
         usage = getattr(response, "usage", None)
         if usage is not None:
@@ -117,6 +122,7 @@ def _invoke(client, *, prompt: str, system_blocks, caller: str, max_tokens: int,
                 caller=caller if attempt == 0 else f"{caller}_pause{attempt}",
                 model=SEARCH_MODEL,
                 elapsed_seconds=round(time.perf_counter() - started, 2),
+                batch=batched,
             )
 
         if getattr(response, "stop_reason", None) != "pause_turn":
@@ -148,6 +154,10 @@ def search_articles(
             max_tokens=max_tokens,
             max_uses=max_uses,
         )
+    except claude_transport.BatchDeadlineExceeded:
+        # 마감을 넘긴 배치 준비 실행은 여기서 멈추고 06:00 동기 실행에 맡긴다. 오류로 삼키면
+        # 에이전트가 '검색 전부 실패'로 보고 폴백 검색을 한 번 더 산다.
+        raise
     except anthropic.AuthenticationError as e:
         print(f"[ClaudeSearch] {caller}: 인증 실패 — 재시도하지 않습니다: {e}")
         return SearchOutcome(error=f"authentication_error: {e}")
@@ -163,6 +173,8 @@ def search_articles(
                 max_tokens=max_tokens,
                 max_uses=max_uses,
             )
+        except claude_transport.BatchDeadlineExceeded:
+            raise
         except Exception as e:
             print(f"[ClaudeSearch] {caller}: 재시도 실패 ({e})")
             return SearchOutcome(error=str(e))
