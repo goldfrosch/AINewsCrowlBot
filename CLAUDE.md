@@ -2,10 +2,11 @@
 
 ## Project Overview
 
-**AINewsCrawlBot** — 매일 02:00 KST에 선호도를 분석하고 06:00 KST에 AI 아티클을 Discord에 자동 게시하는 봇.
+**AINewsCrawlBot** — 매일 02:00 KST에 선호도를 분석하고, 03:00 KST에 배치(토큰 50%)로 기사를 모아 두었다가 06:00 KST에 Discord에 자동 게시하는 봇.
 사용자의 👍/👎 반응을 학습해 다음 날 브리핑의 소스·키워드 가중치를 조정한다.
 
-큐레이션은 **3개 필라**로 나뉘며 필라마다 검색 호출·신선도 정책·목표 배분이 따로 간다.
+큐레이션은 **3개 필라**로 나뉘며 필라마다 신선도 정책과 배분 가중치가 따로 간다.
+검색은 실행당 **그날의 필라 하나**만 한다(가중치 5:3:2 날짜 로테이션).
 
 | 필라 | 내용 | 신선도 | 배분 |
 |------|------|--------|------|
@@ -18,7 +19,7 @@
 ## Tech Stack
 
 - Python 3.11+ / pip / SQLite (`data/bot.db`)
-- discord.py 2.x · Anthropic SDK · `web_search_20260209` (탐색·심사 기본 모델 `claude-sonnet-5`)
+- discord.py 2.x · Anthropic SDK · `web_search_20260209` · Message Batches (탐색 `claude-haiku-4-5` · 심사 `claude-sonnet-5`)
 - feedparser / requests — HN·RSS 후보풀
 
 ## File Map
@@ -29,6 +30,7 @@ bot.py           Discord 봇 (이벤트·스케줄·커맨드)
 pipeline.py      큐레이션 파이프라인 (Discord 무의존)
 curator.py       Claude 리서치 엔진 (에이전트 래퍼 + 폴백)
 claude_search.py Claude 웹 검색 공용 레이어 (stop_reason·pause_turn·재시도)
+claude_transport.py 동기 스트리밍 / Message Batches 전송 (배치 마감·effort 호환)
 recency.py       발행일 파싱 / 신선도 컷오프 / 랭킹 배율
 text_utils.py    JSON 배열 추출 (단일 구현)
 ranker.py        기사 점수 계산 & 피드백 처리
@@ -46,7 +48,7 @@ crawlers/
 agents/
   agent_spec.py           .claude 문서에서 필라·토픽·스킬 로드
   search_prompt.py        필라별 탐색 프롬프트 구성 (날짜 주입)
-  news_curation_agent.py  ★ 필라 병렬 검색 + 톱업 루프 큐레이션 에이전트
+  news_curation_agent.py  ★ 필라 로테이션 검색 큐레이션 에이전트 (하루 한 필라, 동시 검색·톱업은 설정)
   preference_analysis.py  02:00 선호도 심층 분석
 tools/
   loop_runner.py 연속 운영 시뮬레이션 (0건 발생률·비용 측정)
@@ -57,8 +59,10 @@ tools/
 ```bash
 pip install -r requirements.txt
 python main.py                          # 봇 실행
-python dry_run.py --count 6 --verbose   # Discord 없이 파이프라인 실행
+python dry_run.py --count 4 --verbose   # Discord 없이 파이프라인 실행
 python dry_run.py --mark-posted --db data/tmp.db   # 연속일 조건 재현
+python dry_run.py --batch-minutes 60 --db data/tmp.db   # 배치 경로 (토큰 50%)
+python dry_run.py --no-search --db data/tmp.db   # !more 경로 (유료 웹 검색 없음)
 python tools/loop_runner.py --days 5 --db data/loop.db   # 0건 발생률 측정
 python -m pytest -q                     # 테스트
 python -m ruff check --fix . && python -m ruff format .
@@ -70,7 +74,7 @@ python -m ruff check --fix . && python -m ruff format .
 
 필수: `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID`
 필수: `ANTHROPIC_API_KEY` (웹 검색과 별도 품질 심사에 사용)
-선택: `CLAUDE_MODEL`, `ALLOWED_USER_IDS`, `WEB_SEARCH_MODE`(`direct`|`dynamic`, 기본 `direct`)
+선택: `SEARCH_MODEL`·`REVIEW_MODEL`(단계별 모델), `CLAUDE_MODEL`(두 단계를 한 모델로 덮어씀 — 비용 주의), `ALLOWED_USER_IDS`, `WEB_SEARCH_MODE`(`direct`|`dynamic`, 기본 `direct`)
 
 ## 수집 파이프라인
 
@@ -80,8 +84,8 @@ python -m ruff check --fix . && python -m ruff format .
                       창 14일/컷 62·70 → 30일/58·64 → 90일/55·60
    ├ 보류 판정 재적용  앞 패스에서 점수 컷에만 걸린 심사 판정을 완화된 컷으로 다시 판정 (API 호출 없음)
    └ curator.research()  SearchSession으로 패스 사이 상태를 이어 받는다
-     ├ 필라 동시 호출    1패스는 3개 전부, 이후 패스는 신선도 창이 넓어진 필라만 (각자 검색 예산 8회)
-     └ 톱업 라운드      후보가 목표×2.5에 못 미칠 때만 1회 추가. 라운드 번호는 패스를 넘어 이어진다
+     ├ 오늘의 필라      가중치 5:3:2 날짜 로테이션으로 하루 한 필라만 검색 (검색 예산 6회). 이후 패스는 창이 넓어졌을 때만
+     └ 톱업 라운드      기본 끔(TOPUP_MAX_ROUNDS=0). 켜면 후보가 목표×2.5에 못 미칠 때 1회 추가
 2. 중복 제거          저장된 URL과 이번 실행에서 이미 심사로 넘긴 URL을 정규형(dedup_key)으로 뺀다
 3. article_quality    페이지를 병렬로 받아 본문·언어·발행일 검증 (사유별 계측)
 4. editorial_review   8건씩 배치로 병렬 심사 — 한 배치가 잘려도 나머지는 생존
@@ -98,6 +102,20 @@ python -m ruff check --fix . && python -m ruff format .
 **서킷 브레이커**: 크레딧 소진·인증 실패 같은 복구 불가 오류는 `claude_search.FatalSearchError`로
 즉시 전파해 남은 패스를 중단한다. 이게 없으면 실행 1회에 같은 실패를 18번 반복하고
 "게시 0건"만 남아 원인이 묻힌다 (실측). Discord에도 조치 방법을 명시해 알린다.
+
+**비용 방어** (2026-09-30, 10-04): 실행 1회 비용의 85%가 필라 검색 호출이고, 그 대부분은 검색 결과를
+컨텍스트에 싣는 입력 토큰과 검색 수수료다(9/28 실측: $1.11 중 $0.94). 그래서 검색 횟수와 단가를 줄인다.
+- 실행당 검색 호출은 1번이다(`PILLARS_PER_RUN`). 9/23 3필라 분리 뒤 호출이 3~6번, 검색이 17~48회로 늘어 실행당
+  $0.85~2.35가 됐다(분리 전 단일 호출은 $0.31~0.36). 검색 수수료($0.01/회)는 배치 할인 대상이 아니라 검색 횟수가 비용을 정한다.
+- 03:00 `daily_prepare`가 Message Batches(토큰 50%, 검색 수수료는 동일)로 검색·심사해 저수지를 채우고,
+  06:00 브리핑은 저수지에서 게시한다. 마감은 브리핑 15분 전이다. 넘기면 배치를 취소하고 06:00 동기
+  실행이 부족분만 채운다. 심사 배치가 마감을 넘기면 동기로 다시 불러 이미 값을 치른 검색 결과를 살린다.
+- 검색할 때는 부족분이 아니라 `SEARCH_HARVEST_TARGET`만큼 요청한다. 검색 비용은 요청 건수가 아니라 검색 횟수로 정해진다.
+- 누적 비용이 `MAX_COST_PER_RUN_USD`를 넘으면 다음 완화 패스·톱업을 시작하지 않는다(보류 판정 재적용·HN/RSS 보충은 계속).
+- `!more`는 유료 웹 검색을 하지 않는다 — 저수지와 HN/RSS 후보풀만 쓴다.
+- 탐색은 Haiku 4.5, 심사는 Sonnet 5(단일 호출 A/B에서 심사통과 1건당 Haiku $0.043 vs Sonnet 5 $0.059).
+  Haiku는 `effort`를 받지 않아(400) `claude_transport.effort_params()`가 뺀다.
+  `CLAUDE_MODEL`을 설정하면 두 단계가 모두 그 모델로 돈다 — 운영 `.env`에서 확인할 것.
 
 ## 신선도 정책 (중요)
 
@@ -136,14 +154,18 @@ URL을 **비교**할 때는 양쪽을 모두 `dedup_key()`(정규형, 정규화�
 
 | 상수 | 기본값 | 의미 |
 |------|--------|------|
-| `ARTICLES_PER_POST` | 6 | 하루 최대 게시 수 (학습용 피드라 폭이 중요) |
+| `ARTICLES_PER_POST` | 4 | 하루 최대 게시 수. 검색 1회 수확이 하루 소비량을 넘어 잉여가 저수지에 쌓인다 |
 | `MIN_ACCEPTABLE_ARTICLES` | 2 | 이 아래면 경고를 남긴다 |
 | `RECENCY_MAX_AGE_DAYS` | 14 | 기본 신선도 컷오프 (필라별로 재정의) |
 | `RECENCY_RELAXATION_DAYS` | (14,30,90) | 목표 미달 시 단계적으로 넓히는 창 |
 | `OVERFETCH_MULTIPLIER` | 4 | 목표 대비 요청 배수 (min 12 / max 36) |
 | `CANDIDATES_PER_PUBLISHED` | 2.5 | 이 배수를 넘기면 톱업 라운드를 생략한다 (비용 방어) |
-| `TOPUP_MAX_ROUNDS` | 1 | 라운드 1회 = 필라 수만큼 검색 호출 |
-| `WEB_SEARCH_MAX_USES` | 8 | 필라당 검색 예산 |
+| `SEARCH_HARVEST_TARGET` | 24 | 검색할 때 요청하는 후보 수. 부족분과 무관하다 (검색 비용은 요청 건수가 아니라 검색 횟수로 정해진다) |
+| `MAX_COST_PER_RUN_USD` | 0.5 | 실행당 비용 상한. 넘으면 다음 완화 패스·톱업을 시작하지 않는다 |
+| `PILLARS_PER_RUN` | 1 | 실행당 검색할 필라 수. 가중치(5:3:2) 날짜 로테이션으로 고른다 |
+| `BATCH_PREPARE_HOUR` | 3 | 배치 준비 실행 시각(KST). 마감은 브리핑 `BATCH_DEADLINE_MARGIN_MINUTES`(15)분 전 |
+| `TOPUP_MAX_ROUNDS` | 0 | 기본 끔. 라이브에서 톱업이 검색을 두 배(24→48회)로 늘렸다 |
+| `WEB_SEARCH_MAX_USES` | 6 | 필라 호출 1번의 검색 예산 (검색 1회 = 수수료 $0.01 + 결과 약 8천 토큰) |
 | `WEB_SEARCH_MODE` | `direct` | `dynamic`은 서버 코드 실행이 검색 결과를 먼저 거른다. 라이브 A/B에서 비용은 같고 75% 느려 기본값은 direct |
 | `REVIEW_BATCH_SIZE` | 8 | 심사 배치 크기. 잘려도 그 배치만 잃는다 |
 | `VERIFY_FETCH_WORKERS` | 8 | 본문 검증 병렬도 |
@@ -154,10 +176,23 @@ URL을 **비교**할 때는 양쪽을 모두 `dedup_key()`(정규형, 정규화�
 | `CLAUDE_EFFORT` | `medium` | thinking 분량 제어 (`low`~`max`) |
 | `EXCLUDE_URL_LOOKBACK_DAYS` | 45 | 중복 회피용 게시 이력 조회 기간 |
 | `EXCLUDE_URL_PROMPT_LIMIT` | 80 | 탐색 프롬프트 제외 목록 상한 (이번 실행 수집분 → 저수지 → 게시 이력 순) |
-| `MORE_COOLDOWN_SECONDS` | 600 | `!more` 서버 공유 쿨다운. 실행 자체는 락으로 한 번에 하나만 |
+| `MORE_COOLDOWN_SECONDS` | 600 | `!more` 서버 공유 쿨다운. `!more`는 유료 웹 검색 없이 후보풀 심사만 한다 |
 | `FEED_MAX_PER_SOURCE` | 2 | 후보풀 소스별 상한 |
 
 실측 수율(2026-09-23 라이브): 검색 18 → 본문검증 9 → 심사통과 7 → 게시 6, 실행당 $1.14.
+
+실측(2026-10-04 라이브, 탐색 Haiku 4.5 + 심사 Sonnet 5, 배치): 웹 검색 48회(톱업 포함) → 후보 21 → 본문검증 8
+→ 심사통과 4 → 게시 4, 실행당 $0.78(그중 검색 수수료 $0.48), 20분. Haiku가 창 밖 기사를 많이 돌려줘(반환 50건 중
+25건 기한초과) 톱업이 돌았다. 게시 1건당 $0.19로 Sonnet 5 동기(9/28, $0.185)와 비슷해 단가 이득을 수율 손실이 상쇄했다.
+
+단일 호출 전환 후 탐색 모델 A/B(2026-10-04, 배치, 같은 DB 사본·같은 날짜·같은 필라 `ai_practice`):
+
+| 탐색 모델 | 검색 호출 / 웹 검색 | 반환 → 기한초과 | 후보 → 본문검증 → 심사통과 | 비용 | 심사통과 1건당 |
+|-----------|--------------------|-----------------|---------------------------|------|----------------|
+| Sonnet 5  | 3번 / 18회         | 30 → 0          | 29 → 17 → 10              | $0.59 | $0.059        |
+| Haiku 4.5 | 2번 / 12회         | 47 → 23         | 21 → 13 → 6               | $0.26 | $0.043        |
+
+기한초과는 본문 검증 전에 무료로 걸러지므로 검색 단가가 낮은 Haiku가 이긴다. 두 실행 모두 게시 4건을 채웠고 남은 심사통과분은 저수지로 간다.
 
 ## Skills
 

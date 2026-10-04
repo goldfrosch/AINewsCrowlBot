@@ -56,6 +56,10 @@ tools=[{"type": "web_search_20260209", "name": "web_search"}]
 | Opus 5     | `claude-opus-5`     | $5/1M | $25/1M | 1M       |
 | Sonnet 5   | `claude-sonnet-5`   | $2/1M | $10/1M | 1M       |
 | Sonnet 4.6 | `claude-sonnet-4-6` | $3/1M | $15/1M | 200K     |
+| Haiku 4.5  | `claude-haiku-4-5`  | $1/1M | $5/1M  | 200K     |
+
+Haiku 4.5는 `effort`(`output_config`)를 받지 않는다(400) — `claude_transport.effort_params()`가 뺀다.
+Message Batches는 토큰 단가 50%(웹 검색 수수료 $10/1k는 동일)이고 web_search를 포함한 서버 툴을 지원한다.
 
 Sonnet 5 주의점: 새 토크나이저라 같은 글에 토큰이 약 30% 더 나오고, `thinking` 필드가 없으면
 적응형 thinking이 켜진다(Sonnet 4.6은 thinking 없이 동작). `temperature`/`top_p`/`top_k`를

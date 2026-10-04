@@ -120,8 +120,10 @@ DISCORD_CHANNEL_ID=채널_ID
 # 권장
 ANTHROPIC_API_KEY=클로드_API_키
 
-# 선택
-CLAUDE_MODEL=claude-sonnet-5
+# 선택 — 비워 두면 탐색 claude-haiku-4-5 / 심사 claude-sonnet-5.
+# CLAUDE_MODEL을 넣으면 두 단계가 모두 그 모델로 돌아 비용이 오른다.
+SEARCH_MODEL=claude-haiku-4-5
+REVIEW_MODEL=claude-sonnet-5
 EOF
 ```
 
