@@ -26,6 +26,26 @@ def test_manual_run_is_turned_away_while_curation_is_running(mocker) -> None:
     channel.send.assert_awaited_once()
 
 
+def test_more_never_triggers_paid_search(mocker) -> None:
+    """!more는 권한 제한이 없다. 유료 웹 검색은 정기 실행만 한다."""
+    pipeline_run = mocker.patch("bot.run_curation_pipeline", return_value={"articles": [], "search_allowed": False})
+    ctx = mocker.MagicMock()
+    ctx.channel.send = mocker.AsyncMock(return_value=mocker.MagicMock(edit=mocker.AsyncMock()))
+
+    asyncio.run(bot.cmd_more.callback(ctx, 2))
+
+    assert pipeline_run.call_args.kwargs["allow_search"] is False
+
+
+def test_prepare_run_uses_batches(mocker) -> None:
+    """03:00 준비 실행은 배치(토큰 50%)로 저수지만 채운다. 마감이 없으면 동기 호출로 비싸게 돈다."""
+    pipeline_run = mocker.patch("bot.run_curation_pipeline", return_value={"articles": [], "stop_reason": None})
+
+    asyncio.run(bot.daily_prepare.coro())
+
+    assert isinstance(pipeline_run.call_args.kwargs["batch_deadline"], float)
+
+
 def test_more_cooldown_reply_reports_remaining_minutes(mocker) -> None:
     """쿨다운에 걸린 요청을 조용히 버리면 사용자는 봇이 멈춘 줄 안다."""
     ctx = mocker.MagicMock()

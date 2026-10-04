@@ -22,6 +22,7 @@ from pathlib import Path
 # 프로젝트 루트를 sys.path에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -51,6 +52,7 @@ from config import (
     OVERFETCH_MIN,
     OVERFETCH_MULTIPLIER,
     PILLAR_SEARCH_WORKERS,
+    SEARCH_HARVEST_TARGET,
     TOPUP_MAX_ROUNDS,
 )
 
@@ -252,6 +254,9 @@ class SearchSession:
     windows: dict[str, int] = field(default_factory=dict)
     # 다음 검색 라운드 번호. 토픽 회전과 재시도 문구가 이 값을 따른다.
     next_round: int = 0
+    # 새 톱업 라운드를 시작하기 전에 묻는다. 멈출 이유(실행당 비용 상한, 배치 마감)를 돌려주면
+    # 라운드를 건너뛴다. 이미 받아 온 후보는 그대로 쓴다.
+    should_stop: Callable[[], str | None] | None = None
 
 
 def _absorb(
@@ -330,7 +335,9 @@ def run(
         return []
     session.windows.update({key: window_for(key) for key in plan})
 
-    want = _overfetch_target(target_count)
+    # 검색 호출 비용은 요청 건수가 아니라 검색 횟수로 정해진다. 부족분이 작아도 수확량을 줄이지 않고,
+    # 남는 후보는 심사를 거쳐 저수지에 쌓여 다음 날 검색을 건너뛰게 한다.
+    want = max(_overfetch_target(target_count), SEARCH_HARVEST_TARGET)
     quota = _split_by_weight(want, list(plan))
     # 톱업은 라운드당 필라 수만큼 호출이 더 나간다(실측 약 $1). 이미 목표를 채우고도
     # 남을 후보를 확보했으면 돌리지 않는다.
@@ -353,6 +360,10 @@ def run(
     for attempt in range(1 + TOPUP_MAX_ROUNDS):
         if attempt and len(collected) >= sufficient:
             print(f"[Agent] 톱업 생략 — 후보 {len(collected)}개 ≥ 충분 기준 {sufficient}개")
+            break
+        stop = session.should_stop() if attempt and session.should_stop else None
+        if stop:
+            print(f"[Agent] 톱업 생략 — {stop}")
             break
 
         # 라운드 번호는 패스를 넘어 이어진다. 0으로 되돌리면 토픽 회전과 재시도 문구가

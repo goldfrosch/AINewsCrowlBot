@@ -2,9 +2,10 @@
 Discord 봇 본체
 
 주요 흐름:
-  1. 매일 06:00 KST: Claude 에이전트 큐레이션 → 상위 ARTICLES_PER_POST개 게시
+  0. 매일 03:00 KST: Message Batches(토큰 50%)로 검색·심사해 저수지를 채운다 (게시 없음)
+  1. 매일 06:00 KST: 저수지에서 상위 ARTICLES_PER_POST개 게시 (모자라면 동기 큐레이션으로 보충)
   2. 각 기사 임베드에 👍/👎 반응 자동 추가 → 선호도 학습
-  3. !more [n]  : 추가 기사 n개 (Claude가 이미 게시된 URL 제외 후 새로 리서치)
+  3. !more [n]  : 추가 기사 n개 (저수지·HN/RSS만 — 유료 웹 검색 없음)
   4. !crawl     : 즉시 브리핑 (관리자)
   5. !stats     : 선호도 통계
   6. !reset     : 선호도 초기화 (관리자)
@@ -14,6 +15,7 @@ Discord 봇 본체
 import asyncio
 import datetime
 import math
+import time
 from zoneinfo import ZoneInfo
 
 import discord
@@ -26,6 +28,8 @@ from agents.preference_analysis import run_preference_analysis, save_preference_
 from config import (
     ALLOWED_USER_IDS,
     ARTICLES_PER_POST,
+    BATCH_DEADLINE_MARGIN_MINUTES,
+    BATCH_PREPARE_HOUR,
     DAILY_POST_HOUR,
     DISCORD_CHANNEL_ID,
     MORE_ARTICLES_MAX,
@@ -196,6 +200,11 @@ def _failure_message(result: dict, count: int) -> str:
             f"`{str(result.get('error'))[:300]}`\n"
             "→ 크레딧 잔액 또는 ANTHROPIC_API_KEY를 확인하세요. 해결 전까지 매일 0건이 반복됩니다."
         )
+    if not result.get("search_allowed", True):
+        return (
+            "📭 저수지와 HN/RSS 후보풀에 새로 게시할 기사가 없습니다.\n"
+            "`!more`는 비용을 아끼려고 유료 웹 검색을 하지 않습니다. 다음 정기 브리핑을 기다려 주세요."
+        )
     if result.get("error"):
         return f"❌ 큐레이션 실패: {result['error'][:400]}"
     if result.get("raw_count", 0) == 0:
@@ -242,9 +251,14 @@ async def on_ready():
     print(f"✅ 봇 로그인: {bot.user}  |  채널: {DISCORD_CHANNEL_ID}")
     if not daily_preference_analysis.is_running():
         daily_preference_analysis.start()
+    if not daily_prepare.is_running():
+        daily_prepare.start()
     if not daily_brief.is_running():
         daily_brief.start()
-    print(f"📅 매일 {PREFERENCE_ANALYSIS_HOUR:02d}:00 KST 선호도 분석 / {DAILY_POST_HOUR:02d}:00 KST 브리핑 등록")
+    print(
+        f"📅 매일 {PREFERENCE_ANALYSIS_HOUR:02d}:00 KST 선호도 분석 / {BATCH_PREPARE_HOUR:02d}:00 KST 배치 준비 / "
+        f"{DAILY_POST_HOUR:02d}:00 KST 브리핑 등록"
+    )
 
 
 @bot.event
@@ -274,6 +288,34 @@ async def daily_preference_analysis():
         print(f"[선호도 분석] 오류: {e}")
 
 
+def _batch_deadline() -> float:
+    """오늘 브리핑 시각에서 여유분을 뺀 배치 마감 (time.monotonic() 기준)."""
+    now = datetime.datetime.now(tz=KST)
+    post_at = now.replace(hour=DAILY_POST_HOUR, minute=0, second=0, microsecond=0)
+    if post_at <= now:
+        post_at += datetime.timedelta(days=1)
+    seconds = (post_at - now).total_seconds() - BATCH_DEADLINE_MARGIN_MINUTES * 60
+    return time.monotonic() + max(0.0, seconds)
+
+
+@tasks.loop(time=datetime.time(hour=BATCH_PREPARE_HOUR, minute=0, tzinfo=KST))
+async def daily_prepare():
+    """브리핑 전 준비: Message Batches(토큰 단가 50%)로 검색·심사를 돌려 저수지만 채운다.
+
+    06:00 브리핑은 저수지가 차 있으면 검색 없이 게시하고, 준비가 늦었거나 실패했으면
+    동기 호출로 부족분만 채운다.
+    """
+    deadline = _batch_deadline()
+    async with _curation_lock:
+        try:
+            result = await asyncio.to_thread(run_curation_pipeline, ARTICLES_PER_POST, batch_deadline=deadline)
+        except Exception as e:
+            print(f"[배치 준비] 오류: {e}")
+            return
+    note = f" · 중단: {result['stop_reason']}" if result.get("stop_reason") else ""
+    print(f"[배치 준비] 완료 — 게시 대기 {len(result['articles'])}/{ARTICLES_PER_POST}개{note}")
+
+
 @tasks.loop(time=datetime.time(hour=DAILY_POST_HOUR, minute=0, tzinfo=KST))
 async def daily_brief():
     channel = bot.get_channel(DISCORD_CHANNEL_ID)
@@ -295,28 +337,32 @@ async def _research_and_post(
     channel: discord.TextChannel,
     count: int = ARTICLES_PER_POST,
     is_daily: bool = False,
+    allow_search: bool = True,
 ) -> None:
     """수동 요청은 진행 중인 실행이 있으면 돌려보내고, 정기 브리핑은 끝날 때까지 기다렸다가 돈다."""
     if _curation_lock.locked() and not is_daily:
         await channel.send("⏳ 이미 큐레이션이 진행 중입니다. 끝난 뒤에 다시 요청해 주세요.")
         return
     async with _curation_lock:
-        await _curate_and_post(channel, count=count, is_daily=is_daily)
+        await _curate_and_post(channel, count=count, is_daily=is_daily, allow_search=allow_search)
 
 
 async def _curate_and_post(
     channel: discord.TextChannel,
     count: int = ARTICLES_PER_POST,
     is_daily: bool = False,
+    allow_search: bool = True,
 ) -> None:
     """
-    Claude 웹 리서치로 기사를 가져와 게시합니다.
+    Claude 웹 리서치로 기사를 가져와 게시합니다. `allow_search=False`면 저수지와 HN/RSS만 씁니다.
     핵심 로직은 pipeline.run_curation_pipeline()에 위임합니다.
     """
-    status_msg = await channel.send("🧠 Claude가 AI 뉴스를 리서치하는 중…")
+    status_msg = await channel.send(
+        "🧠 Claude가 AI 뉴스를 리서치하는 중…" if allow_search else "📦 저수지와 HN/RSS에서 추가 기사를 찾는 중…"
+    )
 
     try:
-        result = await asyncio.to_thread(run_curation_pipeline, count)
+        result = await asyncio.to_thread(run_curation_pipeline, count, allow_search=allow_search)
 
         # curator가 실패해도 feed 후보풀로 채워졌다면 게시한다.
         # (기존에는 error가 있으면 즉시 반환해 보충분까지 버렸다.)
@@ -372,9 +418,9 @@ def is_admin_or_allowed():
 @bot.command(name="more")
 @commands.cooldown(1, MORE_COOLDOWN_SECONDS, commands.BucketType.guild)
 async def cmd_more(ctx: commands.Context, count: int = ARTICLES_PER_POST):
-    """추가 기사를 가져옵니다. 예: !more 2"""
+    """추가 기사를 가져옵니다. 권한 제한이 없어 유료 웹 검색은 하지 않습니다. 예: !more 2"""
     count = max(1, min(count, MORE_ARTICLES_MAX))
-    await _research_and_post(ctx.channel, count=count, is_daily=False)
+    await _research_and_post(ctx.channel, count=count, is_daily=False, allow_search=False)
 
 
 @cmd_more.error
@@ -562,7 +608,7 @@ async def cmd_help(ctx: commands.Context):
     embed.add_field(
         name="일반",
         value=(
-            f"`!more [n]`  — 추가 기사 n개 요청 (기본 {ARTICLES_PER_POST}, 최대 {MORE_ARTICLES_MAX})\n"
+            f"`!more [n]`  — 추가 기사 n개 (저수지·HN/RSS, 유료 검색 없음 · 기본 {ARTICLES_PER_POST}, 최대 {MORE_ARTICLES_MAX})\n"
             "`!stats`     — 봇 통계 및 선호도 현황\n"
             "`!tokens`    — Claude 토큰 사용량 (오늘/윈도우/평균)\n"
             "`!help_ai`   — 이 도움말"

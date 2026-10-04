@@ -6,6 +6,8 @@ Usage:
     python dry_run.py --count 1        # 1개만
     python dry_run.py --verbose        # 상세 출력
     python dry_run.py --db data/bot.db # DB 경로 지정
+    python dry_run.py --batch-minutes 60  # Message Batches로 호출 (토큰 50%, 60분 마감)
+    python dry_run.py --no-search      # 유료 웹 검색 없이 저수지·HN/RSS만 (!more 경로)
 
 ANTHROPIC_API_KEY가 .env에 설정되어야 합니다.
 """
@@ -13,6 +15,7 @@ ANTHROPIC_API_KEY가 .env에 설정되어야 합니다.
 import argparse
 import json
 import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -63,15 +66,24 @@ def main():
         action="store_true",
         help="선정된 기사를 게시 완료로 표시 (연속 실행 시뮬레이션용)",
     )
+    parser.add_argument(
+        "--batch-minutes",
+        type=float,
+        default=0,
+        help="0보다 크면 Claude 호출을 Message Batches로 보내고 이 시간(분)을 마감으로 둔다",
+    )
+    parser.add_argument("--no-search", action="store_true", help="유료 웹 검색 없이 저수지·HN/RSS만 사용 (!more 경로)")
     args = parser.parse_args()
 
     db.set_db_path(args.db)
     db.init_db()
 
+    deadline = time.monotonic() + args.batch_minutes * 60 if args.batch_minutes > 0 else None
+    mode = f"배치(마감 {args.batch_minutes:g}분)" if deadline else "동기"
     print(f"[Dry Run] 큐레이션 파이프라인 시작 (count={args.count})...")
-    print(f"[Dry Run] 모델 — 탐색 {SEARCH_MODEL} / 심사 {REVIEW_MODEL}")
+    print(f"[Dry Run] 모델 — 탐색 {SEARCH_MODEL} / 심사 {REVIEW_MODEL} · 호출 {mode}")
     usage_mark = token_tracker.latest_row_id()
-    result = run_curation_pipeline(count=args.count)
+    result = run_curation_pipeline(count=args.count, allow_search=not args.no_search, batch_deadline=deadline)
 
     print("\n[Dry Run] 결과 요약:")
     print(f"  - curator 반환: {result['raw_count']}개")
@@ -92,6 +104,8 @@ def main():
             f"수집 {entry['raw']} → 심사통과 {entry['reviewed']} → 신규 {entry['new']}{promoted}"
         )
     print(f"  - DB 신규 저장: {result['new_count']}개")
+    if result.get("stop_reason"):
+        print(f"  - 유료 단계 중단: {result['stop_reason']}")
     print(f"  - 랭킹 후 게시 대상: {len(result['articles'])}개")
 
     # 진단 리포트를 에러보다 먼저 낸다. 이전 구현은 여기서 곧장 exit해서

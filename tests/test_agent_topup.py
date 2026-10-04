@@ -14,7 +14,7 @@ import pytest
 import claude_search
 import database as db
 from agents import news_curation_agent as agent
-from config import OVERFETCH_MAX, OVERFETCH_MIN, TOPUP_MAX_ROUNDS
+from config import OVERFETCH_MAX, OVERFETCH_MIN, SEARCH_HARVEST_TARGET, TOPUP_MAX_ROUNDS
 from tests.conftest import days_ago
 
 PILLARS = len(agent._plan_pillars(None))
@@ -102,6 +102,14 @@ class TestOverfetch:
         quota = agent._split_by_weight(40, ["ai_practice", "ai_game", "graphics_3d"])
         assert quota["ai_practice"] > quota["ai_game"] > quota["graphics_3d"]
 
+    def test_request_size_does_not_shrink_with_shortfall(self, mocker, tmp_db):
+        """검색 비용은 검색 횟수로 정해진다. 부족분이 1건이라고 요청을 줄이면 같은 돈으로 덜 받아 온다."""
+        _, search = _run(mocker, _round(*[f"https://x/{i}" for i in range(40)]), target_count=1)
+        requested = [
+            int(line.split()[1]) for p in _prompts(search) for line in p.splitlines() if line.startswith("Find ")
+        ]
+        assert sum(requested) >= SEARCH_HARVEST_TARGET
+
 
 class TestTopupLoop:
     def test_single_round_when_overfetch_target_met(self, mocker, tmp_db):
@@ -125,6 +133,13 @@ class TestTopupLoop:
         articles, search = _run(mocker, [*_round(), *_round()])
         assert articles == []
         assert search.call_count == PILLARS * (1 + TOPUP_MAX_ROUNDS)
+
+    def test_should_stop_skips_topup_round(self, mocker, tmp_db):
+        """실행당 비용 상한·배치 마감에 걸리면 후보가 모자라도 톱업 라운드를 시작하지 않는다."""
+        session = agent.SearchSession(should_stop=lambda: "실행당 비용 상한 도달")
+        articles, search = _run(mocker, [*_round("https://a/1"), *_round("https://a/2")], session=session)
+        assert [a["url"] for a in articles] == ["https://a/1"]
+        assert search.call_count == PILLARS
 
     def test_retry_round_prompt_is_marked(self, mocker, tmp_db):
         _, search = _run(mocker, [*_round("https://a/1"), *_round("https://a/2")])

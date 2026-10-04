@@ -8,22 +8,27 @@ bot.py, dry_run.py, 테스트에서 공통으로 사용합니다.
   2. 신선도 컷오프 통과분만 DB 저장 (잉여는 pending 저수지로 남음)
   3. 랭킹 후 목표 수량 미달이면 HN/RSS 후보풀로 보충
 
+브리핑 전 준비 실행은 Claude 호출을 Message Batches로 보내고(토큰 50%), `!more`는 1을 건너뛴다.
+
 기존 파이프라인은 1번이 실패하면 그날 브리핑이 0건이었다(실측 45일 중 13일).
 3번이 두 번째 수집 경로 역할을 해 단일 실패점을 없앤다.
 """
 
 import article_quality
 import claude_search
+import claude_transport
 import curator
 import database as db
 import editorial_review
 import recency
+import token_tracker
 from agents.agent_spec import pillar_max_age_days
 from agents.preference_analysis import load_preference_profile
 from article_fetch import dedup_key
 from config import (
     ARTICLES_PER_POST,
     CONTENT_TYPE_MAX_AGE_DAYS,
+    MAX_COST_PER_RUN_USD,
     MAX_PER_SOURCE_IN_POST,
     MAX_PER_TOPIC_IN_POST,
     MIN_ACCEPTABLE_ARTICLES,
@@ -233,9 +238,16 @@ def _topup_from_feeds(
     return inserted, quality_dropped
 
 
-def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
+def run_curation_pipeline(
+    count: int = ARTICLES_PER_POST, *, allow_search: bool = True, batch_deadline: float | None = None
+) -> dict:
     """
     큐레이션 파이프라인을 실행합니다 (Discord 의존 없음).
+
+    Args:
+        allow_search:   False면 유료 웹 검색을 하지 않는다 — 저수지와 HN/RSS 후보풀만 쓴다(`!more`).
+        batch_deadline: time.monotonic() 기준 마감. 주면 Claude 호출을 Message Batches로 보낸다
+                        (토큰 단가 50%). 마감을 넘기면 남은 유료 단계를 멈추고 다음 동기 실행에 맡긴다.
 
     Returns:
         {
@@ -248,8 +260,15 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
             "max_age_days":  int,         # 적용된 신선도 컷오프
             "error":         str | None,  # curator 에러 (보충 성공 시에도 유지)
             "stages":        dict,        # 단계별 통과율·탈락 사유 (본문검증/심사)
+            "stop_reason":   str | None,  # 유료 단계를 멈춘 이유 (실행당 비용 상한·배치 마감)
+            "search_allowed": bool,       # 유료 웹 검색을 허용했는지
         }
     """
+    with claude_transport.batch_until(batch_deadline):
+        return _run(count, allow_search)
+
+
+def _run(count: int, allow_search: bool) -> dict:
     target_count = min(max(count, 0), ARTICLES_PER_POST)
     pref_profile = load_preference_profile()
     if pref_profile:
@@ -272,7 +291,18 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
     totals = {"raw": 0, "fresh": 0, "stale_dropped": 0, "quality_dropped": 0, "new": 0}
     error = None
     fatal_api_error = False
+    stopped: str | None = None
     max_age_days = base_max_age
+    usage_mark = token_tracker.latest_row_id()
+
+    def stop_reason() -> str | None:
+        """새 유료 단계(완화 패스·톱업 라운드)를 시작하지 말아야 할 이유."""
+        if claude_transport.deadline_passed():
+            return "배치 마감 시각 경과"
+        spent = token_tracker.get_usage_since(usage_mark)["total_cost"]
+        if spent >= MAX_COST_PER_RUN_USD:
+            return f"실행당 비용 상한 도달 (${spent:.2f} ≥ ${MAX_COST_PER_RUN_USD:.2f})"
+        return None
 
     # 이전 실행의 잉여(저수지)를 먼저 본다. 검색이 부진한 날의 1차 방어선이다.
     final = _select(target_count, base_max_age)
@@ -287,10 +317,13 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
     # 이때는 품질 컷만 단계적으로 내린다.
     intent_locked = bool(intent and intent.get("active") and intent.get("recency_hours"))
     windows = [base_max_age] * len(RECENCY_RELAXATION_DAYS) if intent_locked else list(RECENCY_RELAXATION_DAYS)
+    if not allow_search:
+        print("[Pipeline] 유료 웹 검색 없이 저수지·HN/RSS 후보풀만 사용합니다")
+        windows = []
 
     # 완화 패스 사이에 이어지는 탐색 상태와, 점수 컷에만 걸린 심사 판정.
     # 패스마다 처음부터 다시 검색·심사하면 1패스를 그대로 반복해 비용만 늘었다.
-    session = SearchSession()
+    session = SearchSession(should_stop=stop_reason)
     held: list = []
 
     for level, window in enumerate(windows):
@@ -326,6 +359,14 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
                 )
                 break
 
+        # 비용 상한·배치 마감에 걸리면 유료 검색만 멈춘다. 보류 판정 재적용은 무료라 남은 패스에서도 계속한다.
+        if level and not stopped:
+            stopped = stop_reason()
+            if stopped:
+                print(f"[Pipeline] 유료 검색 중단 — {stopped}")
+        if stopped:
+            continue
+
         shortfall = target_count - len(final)
         try:
             raw_articles = curator.research(
@@ -343,6 +384,10 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
             error = f"복구 불가 API 오류: {e}"
             fatal_api_error = True
             break
+        except claude_transport.BatchDeadlineExceeded as e:
+            print(f"[Pipeline] 배치 마감 초과 — 남은 유료 단계를 다음 동기 실행에 맡깁니다: {e}")
+            stopped = "배치 마감 시각 경과"
+            continue
         except Exception as e:
             print(f"[Pipeline] curator.research() 실패 — 다음 단계로 진행: {e}")
             error = str(e)
@@ -387,7 +432,8 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
 
     feed_topup = 0
     # feed 후보도 같은 Anthropic 키로 편집 심사를 받으므로, 계정이 막혔으면 의미가 없다.
-    if len(final) < target_count and not fatal_api_error:
+    # 배치 마감을 넘긴 준비 실행도 여기서 멈춘다 — 다음 동기 실행(06:00)이 부족분을 채운다.
+    if len(final) < target_count and not fatal_api_error and not claude_transport.deadline_passed():
         relax_level = len(RECENCY_RELAXATION_DAYS) - 1
         feed_topup, feed_quality_dropped = _topup_from_feeds(
             target_count - len(final), max_age_days, stages, relax_level, seen=session.seen_urls
@@ -413,4 +459,6 @@ def run_curation_pipeline(count: int = ARTICLES_PER_POST) -> dict:
         "error": error,
         "fatal_api_error": fatal_api_error,
         "stages": stages,
+        "stop_reason": stopped,
+        "search_allowed": allow_search,
     }

@@ -7,8 +7,11 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
+import claude_transport
 import pipeline
 from article_quality import VerifiedArticle
 from config import CONTENT_TYPE_MAX_AGE_DAYS, MAX_PER_SOURCE_IN_POST, RECENCY_RELAXATION_DAYS
@@ -207,6 +210,58 @@ class TestRelaxationLoop:
         result = pipeline.run_curation_pipeline(count=2)
 
         assert result["max_age_days"] == 1
+
+
+class TestRunLimits:
+    """실측(2026-09-23): 패스와 톱업이 겹친 날 실행 1회에 $3.34가 나갔다."""
+
+    def test_cost_cap_stops_later_passes(self, mocker, tmp_db):
+        research = mocker.patch("pipeline.curator.research", side_effect=[[], [], []])
+        mocker.patch("pipeline.token_tracker.get_usage_since", return_value={"total_cost": 99.0})
+
+        result = pipeline.run_curation_pipeline(count=2)
+
+        assert research.call_count == 1
+        assert "비용 상한" in result["stop_reason"]
+
+    def test_cost_cap_still_applies_held_decisions(self, mocker, tmp_db):
+        """보류 판정 재적용은 API를 부르지 않는다. 상한에 걸려도 계속해야 한다."""
+        candidate = _article("https://a/mid", score=60.0)  # 1패스 컷 62에는 걸리고 2패스 컷 58은 넘는다
+        mocker.patch("pipeline.curator.research", side_effect=[[candidate], [], []])
+        mocker.patch("pipeline.token_tracker.get_usage_since", return_value={"total_cost": 99.0})
+
+        result = pipeline.run_curation_pipeline(count=1)
+
+        assert [a["url"] for a in result["articles"]] == ["https://a/mid"]
+
+    def test_free_mode_never_searches(self, mocker, tmp_db, no_network_feeds):
+        """!more는 권한 제한이 없어 유료 웹 검색 없이 저수지와 HN/RSS만 쓴다."""
+        research = mocker.patch("pipeline.curator.research", return_value=[])
+
+        result = pipeline.run_curation_pipeline(count=2, allow_search=False)
+
+        research.assert_not_called()
+        no_network_feeds.assert_called_once()
+        assert result["search_allowed"] is False
+
+    def test_passed_batch_deadline_leaves_the_rest_to_the_sync_run(self, mocker, tmp_db, no_network_feeds):
+        """마감을 넘긴 준비 실행이 남은 패스와 후보풀 보충까지 돌면 06:00 브리핑이 그만큼 늦는다."""
+        research = mocker.patch("pipeline.curator.research", side_effect=[[], [], []])
+
+        result = pipeline.run_curation_pipeline(count=2, batch_deadline=time.monotonic() - 1)
+
+        assert research.call_count == 1
+        no_network_feeds.assert_not_called()
+        assert result["stop_reason"] == "배치 마감 시각 경과"
+
+    def test_batch_deadline_raised_mid_search_ends_the_run_quietly(self, mocker, tmp_db, no_network_feeds):
+        mocker.patch("pipeline.curator.research", side_effect=claude_transport.BatchDeadlineExceeded("late"))
+
+        result = pipeline.run_curation_pipeline(count=2, batch_deadline=time.monotonic() - 1)
+
+        assert result["articles"] == []
+        assert result["stop_reason"] == "배치 마감 시각 경과"
+        no_network_feeds.assert_not_called()
 
 
 class TestPerContentTypeWindow:
